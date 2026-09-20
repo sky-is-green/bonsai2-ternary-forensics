@@ -23,19 +23,19 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
 
 | ID | Category | One line | Verdict | Status | Worth re-assessing? |
 |---|---|---|---|---|---|
-| F1 | (a) | Public PTQ collapses off-calibration; published 2.1× is a calibration-passage artifact | Falsified | closed | No |
-| F2 | (a) | GPTQ/Hessian variants move codes *away* from Prism's; RTN 0.9145 vs 0.8086–0.8497 | Falsified | closed | No |
-| F3 | (a) | Stochastic calibration resonance (5% noise) has no effect: +0.003 pp | Falsified | closed | No |
-| F4 | (a) | rotate+absmean RTN of the base = 23,606 PPL vs 18.5851 (1,270×) | Falsified | closed | No |
-| F5 | (a)/(b) | Last ~8% localized to end-to-end QAT; 27B proof-run priced and deliberately not funded | Deferred by decision | closed (deferred) | Only if capability ownership is required |
-| F6 | (b) | Student-stream block-wise KD = 1.25 M PPL | Dead-end | closed | Only inside end-to-end QAT |
-| F7 | (b) | Teacher-forced block-wise KD = 1.06 M PPL; local per-layer KD compounds | Dead-end | closed | No |
-| F8 | (a)/(b) | Entropy/excess-loss selection lost to random: 172.3 vs 115.9 PPL | Falsified (pilot) | closed | Yes — larger pool/seeds |
-| F9 | (b)/(c) | 27B full-model offload swap-thrashes (55.6 GB vs 40 GB VRAM + ~20 GB RAM) | Mitigated | resolved | No |
-| F10 | (c) | `-ngl 99` on one 20 GB card fails to allocate; fixed by auto-fit | Resolved | resolved | No |
-| F11 | (c)/(d) | Internal tooling drift blocked harness imports; pinned dependency workaround is interim | Mitigated | resolved (fix pending) | Yes — T23 |
-| F12 | (c)/(d) | Two ROCm contexts hang GPU1 at firmware level | Mitigated | resolved (policy) | If driver changes |
-| F13 | (d) | `oracle.decode_q2_0_g64` (type 42) decodes garbage | Open | open | Yes — cheap fix |
+| [F1](#f1--public-ptq-collapses-off-calibration) | (a) | Public PTQ collapses off-calibration; published 2.1× is a calibration-passage artifact | Falsified | closed | No |
+| [F2](#f2--gptqhessian-variants-move-codes-away-from-prisms) | (a) | GPTQ/Hessian variants move codes *away* from Prism's; RTN 0.9145 vs 0.8086–0.8497 | Falsified | closed | No |
+| [F3](#f3--stochastic-calibration-resonance-falsified) | (a) | Stochastic calibration resonance (5% noise) has no effect: +0.003 pp | Falsified | closed | No |
+| [F4](#f4--no-rental-rotateabsmean-rtn-parity-is-dead) | (a) | rotate+absmean RTN of the base = 23,606 PPL vs 18.5851 (1,270×) | Falsified | closed | No |
+| [F5](#f5--the-last-8-was-localized-to-end-to-end-qat-and-deliberately-not-funded) | (a)/(b) | Last ~8% localized to end-to-end QAT; 27B proof-run priced and deliberately not funded | Deferred by decision | closed (deferred) | Only if capability ownership is required |
+| [F6](#f6--student-stream-block-wise-kd-dead-end) | (b) | Student-stream block-wise KD = 1.25 M PPL | Dead-end | closed | Only inside end-to-end QAT |
+| [F7](#f7--teacher-forced-block-wise-kd-dead-end) | (b) | Teacher-forced block-wise KD = 1.06 M PPL; local per-layer KD compounds | Dead-end | closed | No |
+| [F8](#f8--entropyexcess-loss-data-selection-lost-to-random) | (a)/(b) | Entropy/excess-loss selection lost to random: 172.3 vs 115.9 PPL | Falsified (pilot) | closed | Yes — larger pool/seeds |
+| [F9](#f9--27b-full-model-cpu-offload-swap-thrashes) | (b)/(c) | 27B full-model offload swap-thrashes (55.6 GB vs 40 GB VRAM + ~20 GB RAM) | Mitigated | resolved | No |
+| [F10](#f10---ngl-99-allocation-failure-on-one-20-gb-card) | (c) | `-ngl 99` on one 20 GB card fails to allocate; fixed by auto-fit | Resolved | resolved | No |
+| [F11](#f11--internal-tooling-drift-blocked-harness-imports) | (c)/(d) | Internal tooling drift blocked harness imports; pinned dependency workaround is interim | Mitigated | resolved (fix pending) | Yes — T23 |
+| [F12](#f12--two-rocm-contexts-hang-gpu1-at-firmware-level) | (c)/(d) | Two ROCm contexts hang GPU1 at firmware level | Mitigated | resolved (policy) | If driver changes |
+| [F13](#f13--oracledecode_q2_0_g64-decodes-garbage) | (d) | `oracle.decode_q2_0_g64` (type 42) decodes garbage | Open | open | Yes — cheap fix |
 
 ---
 
@@ -46,7 +46,7 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
   reach Bonsai-2-class quality at ~2 bpw, and the published **2.1×** is the
   attainable off-calibration bar.
 - **Method:** Ported ThakiCloud's `quip.py` verbatim into
-  `bonsai_forensics/reference.py` (dense QR rotation, their upper-Cholesky
+  [`bonsai_forensics/reference.py`](../bonsai_forensics/reference.py) (dense QR rotation, their upper-Cholesky
   `Hinv`, per-row absmean, block 128); binary and ternary arms on
   `Qwen/Qwen3-1.7B`; fixed-passage metric vs held-out windows with real
   `32×2048` calibration Hessians.
@@ -59,7 +59,7 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
 - **Verdict:** Falsified. The 2.1× exists only when calibration and evaluation
   are the same passage.
 - **Evidence:** commit `ea089e2`; `artifacts/reference/*.json`;
-  `docs/RUN-CANARY.md`; project records Round 6.
+  [`docs/RUN-CANARY.md`](RUN-CANARY.md); project records Round 6.
 - **Status:** closed.
 - **What it rules out:** PTQ tuning as a route to 27B parity; the published 2.1×
   as an off-calibration quality bar.
@@ -84,7 +84,7 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
   codes *away* from theirs.
 - **Verdict:** Falsified. The quantizer reverse-engineering track is closed.
 - **Evidence:** `artifacts/gate3/prefix27/sweep-layer0.json`;
-  `research/gate3-qat-verdict.md`; project records Round 12. (T32 was diagnostics-only;
+  [`research/gate3-qat-verdict.md`](../research/gate3-qat-verdict.md); project records Round 12. (T32 was diagnostics-only;
   no source commit.)
 - **Status:** closed.
 - **What it rules out:** GPTQ/OBQ as the missing mechanism; a GPTQ rental for
@@ -101,11 +101,11 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
   compared against Prism's released 1.7B `PQ2_0` trits (byte-exact decode).
 - **Outcome:** RTN 0.61196; GPTQ clean 0.61771; GPTQ noise5 **0.61774**;
   noise moved 4.28% of codes; agreement change **+0.003 pp**. No effect.
-  Side finding: the `Q2_0_g64` (type 42) decoder in `oracle.py` decodes garbage
-  (see F13); T7's 0.612 came from the F16 dequant, not this decoder.
+  Side finding: the `Q2_0_g64` (type 42) decoder in [`oracle.py`](../bonsai_forensics/oracle.py) decodes garbage
+  (see [F13](#f13--oracledecode_q2_0_g64-decodes-garbage)); T7's 0.612 came from the F16 dequant, not this decoder.
 - **Verdict:** Falsified.
 - **Evidence:** `artifacts/gate3/scr-report.json`;
-  `research/gate3-qat-verdict.md`; project records Round 12.
+  [`research/gate3-qat-verdict.md`](../research/gate3-qat-verdict.md); project records Round 12.
 - **Status:** closed.
 - **What it rules out:** calibration noise, dithering and stochastic rounding as
   the source of the residual.
@@ -130,7 +130,7 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
 - **Verdict:** Falsified. 92% trit agreement is not a quality proxy; the missing
   8% carries the entire gap.
 - **Evidence:** commit `5eac0c0` (T31); `artifacts/gate2/eval-report.json`;
-  `artifacts/gate2/rtn-absmean.gguf`; `research/gate2-rtn-quality.md`;
+  `artifacts/gate2/rtn-absmean.gguf`; [`research/gate2-rtn-quality.md`](../research/gate2-rtn-quality.md);
   project records Round 11.
 - **Status:** closed.
 - **What it rules out:** the no-rental rotate+RTN shortcut for parity; trit
@@ -145,7 +145,7 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
 - **Claim/hypothesis:** Local QAT/KD (STE ternary training + KD) can close the
   quality gap and reach Prism's acceptance rate (≥97% retention, stretch 98.2%
   = Bonsai-2 parity) without a rental.
-- **Method:** T28 `bonsai_forensics/recover.py` — 196 attention/MLP linears
+- **Method:** T28 [`bonsai_forensics/recover.py`](../bonsai_forensics/recover.py) — 196 attention/MLP linears
   wrapped as exact ternary (g128, half-away) with straight-through gradients;
   bf16 master weights; KD vs the frozen fp32 teacher; Adafactor + gradient
   checkpointing; 301k-token tinyshakespeare corpus. It ran *after* the
@@ -155,10 +155,10 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
   steps) 1.129× with held-out worsening while train loss fell (overfit).
   1.103× clears the 1.44× Prism bar but is **short of the ≥97% mission
   retention target** (stretch 98.2%). Corpus-limited at ~5k steps.
-- **Why this is the last 8% (elimination chain):** Gate 2 (F4) showed the ~8%
-  trit residual carries the entire quality gap; Gate 3 (F2, F3) showed that
+- **Why this is the last 8% (elimination chain):** Gate 2 ([F4](#f4--no-rental-rotateabsmean-rtn-parity-is-dead)) showed the ~8%
+  trit residual carries the entire quality gap; Gate 3 ([F2](#f2--gptqhessian-variants-move-codes-away-from-prisms), [F3](#f3--stochastic-calibration-resonance-falsified)) showed that
   residual is *weight movement during training*, not any quantizer/calibration
-  trick; and local per-layer KD cannot control global compounding (F6, F7).
+  trick; and local per-layer KD cannot control global compounding ([F6](#f6--student-stream-block-wise-kd-dead-end), [F7](#f7--teacher-forced-block-wise-kd-dead-end)).
   With every non-training route eliminated, end-to-end QAT/KD is the only
   remaining route to Prism's exact acceptance. The gap is therefore *localized*,
   not mysterious.
@@ -309,7 +309,7 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
   (unit 561 passed, integration 50 passed + 3 skipped).
 - **Verdict:** Mitigated; the durable fix is task **T23** (still open).
 - **Evidence:** project records, Round 1 finding F6, Round 2, T23 row;
-  project handoff §6; `docs/BONSAI-RUNTIME.md`.
+  project handoff §6; [`docs/BONSAI-RUNTIME.md`](BONSAI-RUNTIME.md).
 - **Status:** resolved operationally; real fix pending.
 - **What it rules out:** importing the dependency at its latest state without
   the pin.
@@ -340,7 +340,7 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
 ## F13 — `oracle.decode_q2_0_g64` decodes garbage
 
 - **Category:** (d) open bug/risk.
-- **Claim/hypothesis:** The type-42 `Q2_0_g64` decoder in `oracle.py` reads
+- **Claim/hypothesis:** The type-42 `Q2_0_g64` decoder in [`oracle.py`](../bonsai_forensics/oracle.py) reads
   mainline 18-byte g64 blocks correctly.
 - **Method:** Cross-checked decoded 1.7B `Q2_0_g64` tensors against the F16
   dequant / RTN agreement.
@@ -348,19 +348,19 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
   of **0.612** came from the F16-dequant path, not from this decoder. The
   `PQ2_0` (type 142) decoder *is* byte-exact against Prism's own F16 dequant.
 - **Verdict:** Open latent bug. Not on the 27B path (the 27B uses `PQ2_0`).
-- **Evidence:** `bonsai_forensics/oracle.py:190` (`decode_q2_0_g64` reads `d`
+- **Evidence:** [`bonsai_forensics/oracle.py:190`](../bonsai_forensics/oracle.py) (`decode_q2_0_g64` reads `d`
   from bytes 16..17 and `qs` from 0..15); mainline ggml defines
   `block_q2_0 { ggml_half d; uint8_t qs[QK2_0/4]; }`, i.e. `d` first
   (`~/.unsloth/llama.cpp/ggml/src/ggml-common.h:194–199`). The offline test
-  (`tests/ternary/test_oracle.py:35`) encodes the same wrong layout, so it is
+  ([`tests/ternary/test_oracle.py:35`](../tests/ternary/test_oracle.py)) encodes the same wrong layout, so it is
   self-consistent but not a real validation.
-  `research/gate3-qat-verdict.md` (lines 29–30, 82); `project handoff` §7;
+  [`research/gate3-qat-verdict.md`](../research/gate3-qat-verdict.md) (lines 29–30, 82); `project handoff` §7;
   project records Round 12.
 - **Status:** open.
-- **What it rules out:** trusting `Q2_0_g64` agreement numbers from `oracle.py`
+- **What it rules out:** trusting `Q2_0_g64` agreement numbers from [`oracle.py`](../bonsai_forensics/oracle.py)
   until fixed; using this decoder for the 1.7B oracle comparisons.
 - **Cost to revisit:** low (a few lines + one regression test in
-  `tests/ternary/test_oracle.py`).
+  [`tests/ternary/test_oracle.py`](../tests/ternary/test_oracle.py)).
 - **Worth re-assessing?** Yes — cheap correctness fix.
 
 ---
@@ -392,12 +392,12 @@ Results:
   contradiction, but note the distinction between total and usable RAM.
 - **F2/F3** are recorded as "T32/Gate 3" in the seed; T32 was a diagnostics-only
   round with no source commit — evidence is the `artifacts/gate3/`
-  reports plus the `research/gate3-qat-verdict.md` write-up and project records R12.
+  reports plus the [`research/gate3-qat-verdict.md`](../research/gate3-qat-verdict.md) write-up and project records R12.
 - **F6/F7/F8** PPL figures were verified directly from the saved eval logs and
   JSONs (1,252,835 / 1,055,018 / 172.28 vs 115.91).
 - **F10** was verified against the actual server log
   (`logs/llama_server_8090.log`), not just the write-up.
 - **F11/F12/F13** are recorded from project records / `project handoff`; F13 was
-  additionally confirmed against the `oracle.py` source.
+  additionally confirmed against the [`oracle.py`](../bonsai_forensics/oracle.py) source.
 
 No other contradictions were found between the seeded entries and the reports.

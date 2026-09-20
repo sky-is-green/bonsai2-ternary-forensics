@@ -10,7 +10,7 @@ lives in their trained weights (Gate 3), so no local training is required.
 |---|---|
 | Model | `artifacts/oracle/bonsai27/Ternary-Bonsai-2-27B-PQ2_0.gguf` (7.2 GB, sha `3907dc16…`) |
 | Fork binary | `artifacts/oracle/prism-fork/bin/llama-prism-b10709-9a9394a/llama-server` |
-| Driver | `scripts/eval_llama_server.py` |
+| Driver | [`scripts/eval_llama_server.py`](../scripts/eval_llama_server.py) |
 
 ## Serve / evaluate
 
@@ -27,7 +27,7 @@ HIP_VISIBLE_DEVICES=1 python scripts/eval_llama_server.py smoke \
 - `HIP_VISIBLE_DEVICES=1` keeps the desktop GPU0 free; the 27B `PQ2_0` fits one
   RX 7900 XT at `-ngl 99`, so both cards are not needed.
 - The original run used a private harness driver; this repository ships the
-  standalone replacement (`scripts/eval_llama_server.py`) with no harness
+  standalone replacement ([`scripts/eval_llama_server.py`](../scripts/eval_llama_server.py)) with no harness
   dependency.
 
 ## Results (2026-09-20)

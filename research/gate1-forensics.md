@@ -1,7 +1,7 @@
 # Gate-1 forensics — does rotate+RTN in Prism's basis reproduce the released trits?
 
 **Task:** T30 (Round 10, 2026-09-20) · **Cost:** $0, local only
-**Module:** `bonsai_forensics/gate1_forensics.py` (16 offline tests)
+**Module:** [`bonsai_forensics/gate1_forensics.py`](../bonsai_forensics/gate1_forensics.py) (16 offline tests)
 **Report:** `artifacts/gate1/gate1-report.json` (26 tensors, layers 0/3/62/63)
 **Base shards:** `artifacts/base27/model-00001/000017-of-00018.safetensors` (6.1 GB)
 
@@ -74,7 +74,7 @@ artifact; the next lever is still recovery/hessians, now in the correct basis.
   -> the 55.6 GB memory math stands (4x24 GB or offload). The QAT route (T28)
   now also gets a much better start (absmean RTN in their basis, not ours).
 - **Spec/quantizer follow-up (project hotspot):** if we want our pipeline closer
-  to Prism, the LS refinement in `quant.py` should be optional/off for
+  to Prism, the LS refinement in [`quant.py`](../bonsai_forensics/quant.py) should be optional/off for
   PQ2_0-class runs; absmean RTN dominates on this artifact.
 - **Layout follow-up:** `run_quant`/`pack_gguf` must reproduce the observed
   per-suffix layouts (qkv/z tiled, ssm_out grouped) before any artifact is

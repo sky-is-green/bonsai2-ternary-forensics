@@ -110,7 +110,7 @@ python -m bonsai_forensics.spec_hash --check
 ```
 
 The suite is offline and uses synthetic tensors only. It pins the frozen wire
-contract (`bonsai_forensics/spec.md`, canonical hash
+contract ([`bonsai_forensics/spec.md`](bonsai_forensics/spec.md), canonical hash
 `0d2c008b4aee726351f9b90e44ec003c18b579d8690db24c77a089d9e1fc652b`).
 
 ## Caveats
@@ -127,15 +127,15 @@ This repository was extracted from a private research project. Task identifiers
 (T30, T31, T32, ...), round numbers, and references to "project records" /
 "project handoff" in the docs and research write-ups refer to that project's
 internal coordination log, which is not published. Commit hashes and artifact
-paths cited as evidence in `docs/FAILURES.md` are provenance from the original
+paths cited as evidence in [`docs/FAILURES.md`](docs/FAILURES.md) are provenance from the original
 working repository; the reports in `research/` and the numbers reproduced here
 are the authoritative record. No model weights are redistributed.
 
 ## License and attribution
 
 Apache-2.0 (see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE)). The analyzed
-model, Bonsai 2 27B, is by **Prism ML** (Apache-2.0), derived from **Qwen3.8-27B**
+model, Bonsai 2 27B, is by [**Prism ML**](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf) (Apache-2.0), derived from [**Qwen3.8-27B**](https://huggingface.co/Qwen/Qwen3.8-27B)
 by **Alibaba Cloud** (Apache-2.0); "Created using Bonsai by Prism ML." The
-public PTQ reference reproduced by `bonsai_forensics/reference.py` is
-**ThakiCloud/bonsai-1bit-repro** (Apache-2.0). Runtime evaluation uses Prism's
-llama.cpp fork (MIT) on ggml (MIT).
+public PTQ reference reproduced by [`bonsai_forensics/reference.py`](bonsai_forensics/reference.py) is
+[**ThakiCloud/bonsai-1bit-repro**](https://github.com/ThakiCloud/bonsai-1bit-repro) (Apache-2.0). Runtime evaluation uses
+[Prism's llama.cpp fork](https://github.com/PrismML-Eng/llama.cpp) (MIT) on ggml (MIT).

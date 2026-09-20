@@ -41,8 +41,8 @@ public base, not inferred from marketing.
 
 | Fact | Value / source |
 |---|---|
-| Base model | `Qwen/Qwen3.8-27B`, HF `main` sha `1d4bf0f2…` (the pin) |
-| Released artifact | `Ternary-Bonsai-2-27B-PQ2_0.gguf`, 7.2 GB, sha `3907dc16…` |
+| Base model | [`Qwen/Qwen3.8-27B`](https://huggingface.co/Qwen/Qwen3.8-27B), HF `main` sha `1d4bf0f2…` (the pin) |
+| Released artifact | [`Ternary-Bonsai-2-27B-PQ2_0.gguf`](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf), 7.2 GB, sha `3907dc16…` |
 | Format | ternary g128, FP16 scale/group, blockwise Walsh–Hadamard rotation `R = (1/√n)·Hₙ·diag(S)`, n=1024 |
 | Rotation convention | **input-axis, sign-then-FWHT, block 1024, no norm fold** (T30) |
 | Layouts in the released file | `in_proj_qkv` and `in_proj_z` V rows **tiled**; `ssm_out` stays **grouped**; `ffn_*`/`attn_*` plain; embeddings input-rotated |
@@ -54,7 +54,7 @@ public base, not inferred from marketing.
 
 **The decisive fact:** Prism's quality lives in their *trained* weights, not in a
 public quantizer. Gate 3 proved no error-compensation variant of the public base
-reproduces their codes (F2), stochastic-rounding noise has no effect (F3), and
+reproduces their codes ([F2](FAILURES.md#f2--gptqhessian-variants-move-codes-away-from-prisms)), stochastic-rounding noise has no effect ([F3](FAILURES.md#f3--stochastic-calibration-resonance-falsified)), and
 their codes fit our activation Hessians *worse* than plain RTN (1.072×). The
 only mechanism left standing is weight movement during training.
 
@@ -65,10 +65,10 @@ only mechanism left standing is weight movement during training.
 Two tracks were considered:
 
 - **Track A — build our own artifact** (PTQ → QAT/KD). Closed for parity:
-  the quantizer reverse-engineering track is closed (F2, F3), local
+  the quantizer reverse-engineering track is closed ([F2](FAILURES.md#f2--gptqhessian-variants-move-codes-away-from-prisms), [F3](FAILURES.md#f3--stochastic-calibration-resonance-falsified)), local
   rotate+absmean RTN of the base collapses to 23,606 PPL vs their 18.5851
-  (1,270×; F4), and the 1.7B QAT/KD proof reached 1.103× / 90.6% retention,
-  short of the ≥97% mission target and corpus-limited (F5).
+  (1,270×; [F4](FAILURES.md#f4--no-rental-rotateabsmean-rtn-parity-is-dead)), and the 1.7B QAT/KD proof reached 1.103× / 90.6% retention,
+  short of the ≥97% mission target and corpus-limited ([F5](FAILURES.md#f5--the-last-8-was-localized-to-end-to-end-qat-and-deliberately-not-funded)).
 - **Track B — run Prism's released `PQ2_0` on the Prism ROCm fork and evaluate
   it with our harness.** This is the pragmatic end-state and the shipped result.
 
@@ -76,19 +76,19 @@ Track B is the deliverable: the released 27B runs on **one** RX 7900 XT at
 39.6 t/s, and our harness's memory layer measurably improves context fidelity
 over a FIFO baseline (§5). Track A is not abandoned as a *research* direction —
 it is simply a training problem, not a quantization one, and no local per-layer
-KD variant solved it (F6, F7).
+KD variant solved it ([F6](FAILURES.md#f6--student-stream-block-wise-kd-dead-end), [F7](FAILURES.md#f7--teacher-forced-block-wise-kd-dead-end)).
 
 **Why the last 8% was not chased.** Gate 2 showed the ~8% trit residual carries
-the entire quality gap (F4); Gate 3 showed that residual is *trained weight
-movement*, not a quantizer trick (F2, F3); local per-layer KD cannot control
-global compounding (F6, F7). That leaves **end-to-end QAT/KD at 27B as the only
+the entire quality gap ([F4](FAILURES.md#f4--no-rental-rotateabsmean-rtn-parity-is-dead)); Gate 3 showed that residual is *trained weight
+movement*, not a quantizer trick ([F2](FAILURES.md#f2--gptqhessian-variants-move-codes-away-from-prisms), [F3](FAILURES.md#f3--stochastic-calibration-resonance-falsified)); local per-layer KD cannot control
+global compounding ([F6](FAILURES.md#f6--student-stream-block-wise-kd-dead-end), [F7](FAILURES.md#f7--teacher-forced-block-wise-kd-dead-end)). That leaves **end-to-end QAT/KD at 27B as the only
 remaining route** to Prism's exact acceptance. The programme stopped there *by
 decision*: the fix is now known and priced, the mission's non-goal is the
 recipe, the result is public, and Track B already ships it. The defensible claim
 this supports is **"the gap is localized and reachable"** — *not* "replication
 is proven". Gate 3 established that *some* training moved their weights, not
 that QAT/KD specifically reproduces their numbers, and the 1.7B QAT run was
-itself short of target. See F5.
+itself short of target. See [F5](FAILURES.md#f5--the-last-8-was-localized-to-end-to-end-qat-and-deliberately-not-funded).
 
 ---
 
@@ -96,33 +96,33 @@ itself short of target. See F5.
 
 Full entries, evidence and revisit costs are in [`FAILURES.md`](FAILURES.md).
 
-- **F1** Public PTQ at ~2 bpw does not survive off-calibration; the published
+- [**F1**](FAILURES.md#f1--public-ptq-collapses-off-calibration) Public PTQ at ~2 bpw does not survive off-calibration; the published
   2.1× is a calibration-passage artifact (our canary 3514×, ThakiCloud
-  reference 1.2e3–3.5e4× held-out).
-- **F2** Every GPTQ/Hessian variant moves codes *away* from Prism's; RTN 0.9145
+  [reference](https://github.com/ThakiCloud/bonsai-1bit-repro) 1.2e3–3.5e4× held-out).
+- [**F2**](FAILURES.md#f2--gptqhessian-variants-move-codes-away-from-prisms) Every GPTQ/Hessian variant moves codes *away* from Prism's; RTN 0.9145
   vs GPTQ 0.8086–0.8497 → the quantizer reverse-engineering track is closed.
-- **F3** Stochastic Calibration Resonance (5% calibration noise/dithering) is
+- [**F3**](FAILURES.md#f3--stochastic-calibration-resonance-falsified) Stochastic Calibration Resonance (5% calibration noise/dithering) is
   falsified: 4.3% of codes moved, agreement changed by **+0.003 pp**.
-- **F4** rotate+absmean RTN of the public base = **23,606 PPL** vs their
+- [**F4**](FAILURES.md#f4--no-rental-rotateabsmean-rtn-parity-is-dead) rotate+absmean RTN of the public base = **23,606 PPL** vs their
   **18.5851** (1,270×) in the same binary/corpus/settings → no-rental RTN parity
   is dead.
-- **F5** The last ~8% was localized to end-to-end QAT — every cheaper route was
-  eliminated (F1–F4, F6, F7) and the 1.7B proof reached **1.103× / 90.6%**
+- [**F5**](FAILURES.md#f5--the-last-8-was-localized-to-end-to-end-qat-and-deliberately-not-funded) The last ~8% was localized to end-to-end QAT — every cheaper route was
+  eliminated ([F1–F4](FAILURES.md#summary), [F6](FAILURES.md#f6--student-stream-block-wise-kd-dead-end), [F7](FAILURES.md#f7--teacher-forced-block-wise-kd-dead-end)) and the 1.7B proof reached **1.103× / 90.6%**
   retention, short of the ≥97% target; the 27B proof-run was priced and
   **deliberately not funded** because the result is public and Track B ships it.
-- **F6** Student-stream block-wise KD = **1.25 M PPL**, worse than RTN
+- [**F6**](FAILURES.md#f6--student-stream-block-wise-kd-dead-end) Student-stream block-wise KD = **1.25 M PPL**, worse than RTN
   (per-layer compounding).
-- **F7** Teacher-forced block-wise KD = **1.06 M PPL**, still worse than RTN;
+- [**F7**](FAILURES.md#f7--teacher-forced-block-wise-kd-dead-end) Teacher-forced block-wise KD = **1.06 M PPL**, still worse than RTN;
   local per-layer KD cannot control global compounding.
-- **F8** Entropy/excess-loss data selection lost to random (172.3 vs 115.9 PPL).
-- **F9** 27B full-model CPU offload swap-thrashes (55.6 GB weights vs 40 GB VRAM
+- [**F8**](FAILURES.md#f8--entropyexcess-loss-data-selection-lost-to-random) Entropy/excess-loss data selection lost to random (172.3 vs 115.9 PPL).
+- [**F9**](FAILURES.md#f9--27b-full-model-cpu-offload-swap-thrashes) 27B full-model CPU offload swap-thrashes (55.6 GB weights vs 40 GB VRAM
   + ~20 GB usable RAM); the prefix trick (embedding + first N layers) avoids it.
-- **F10** `-ngl 99` on one 20 GB card fails to allocate (`unable to allocate
+- [**F10**](FAILURES.md#f10---ngl-99-allocation-failure-on-one-20-gb-card) `-ngl 99` on one 20 GB card fails to allocate (`unable to allocate
   ROCm0 buffer`); **resolved** by unsloth-style auto-fit `ngl`.
 
-Operational incidents that do not bear on the findings (F11: tooling-drift
-import workaround; F12: ROCm firmware quirk; F13: a latent decoder bug in
-`oracle.py`) are recorded in [`FAILURES.md`](FAILURES.md) but not carried here.
+Operational incidents that do not bear on the findings ([F11](FAILURES.md#f11--internal-tooling-drift-blocked-harness-imports): tooling-drift
+import workaround; [F12](FAILURES.md#f12--two-rocm-contexts-hang-gpu1-at-firmware-level): ROCm firmware quirk; [F13](FAILURES.md#f13--oracledecode_q2_0_g64-decodes-garbage): a latent decoder bug in
+[`oracle.py`](../bonsai_forensics/oracle.py)) are recorded in [`FAILURES.md`](FAILURES.md) but not carried here.
 
 ---
 
@@ -132,8 +132,8 @@ import workaround; F12: ROCm firmware quirk; F13: a latent decoder bug in
 |---|---|---|
 | **T30 / Gate 1** | Does rotate+RTN in Prism's basis reproduce their trits? | Basis **cracked**: 0.920 mean / 0.885 min agreement. Residual is *structural* (non-monotone within groups, denser codes, ~10% lower weight-space error than RTN) — fingerprinted as error-compensated or QAT weights. |
 | **T31 / Gate 2** | What does the residual cost? | A byte-controlled swap of all **402** `PQ2_0` payloads for rotate+absmean RTN of the public base collapses PPL **18.5851 → 23,606 (1,270×)**. Metadata/exemptions stay byte-identical; 402/402 post-patch SHA-256 verified. |
-| **T32 / Gate 3** | Quantizer trick or trained weights? | **Trained weights.** SCR +0.003 pp (F3); GPTQ/H-variants all move codes away (RTN 0.9145 vs 0.8086–0.8497, F2); their codes' activation-weighted error is 1.072× RTN's. The reverse-engineering track is closed. |
-| **T28** | Can local QAT/KD close the gap? | 1.7B reached **1.103×** held-out (bar 1.44×) — 90.6% retention; run3 overfit at 7k steps on a 301k-token corpus. This is the last lever: the ~8% residual is trained weights (Gates 2–3), so end-to-end QAT is the only route to Prism's exact acceptance — known, priced, deliberately not run (F5). |
+| **T32 / Gate 3** | Quantizer trick or trained weights? | **Trained weights.** SCR +0.003 pp ([F3](FAILURES.md#f3--stochastic-calibration-resonance-falsified)); GPTQ/H-variants all move codes away (RTN 0.9145 vs 0.8086–0.8497, [F2](FAILURES.md#f2--gptqhessian-variants-move-codes-away-from-prisms)); their codes' activation-weighted error is 1.072× RTN's. The reverse-engineering track is closed. |
+| **T28** | Can local QAT/KD close the gap? | 1.7B reached **1.103×** held-out (bar 1.44×) — 90.6% retention; run3 overfit at 7k steps on a 301k-token corpus. This is the last lever: the ~8% residual is trained weights (Gates 2–3), so end-to-end QAT is the only route to Prism's exact acceptance — known, priced, deliberately not run ([F5](FAILURES.md#f5--the-last-8-was-localized-to-end-to-end-qat-and-deliberately-not-funded)). |
 | **T29** | Ship the released model. | Served on the Prism fork, smoke **5/5**, harness evaluation below. |
 
 ---
@@ -141,7 +141,7 @@ import workaround; F12: ROCm firmware quirk; F13: a latent decoder bug in
 ## 6. Evaluation (T29)
 
 Released `Ternary-Bonsai-2-27B-PQ2_0` served by the Prism fork on GPU1
-(`HIP_VISIBLE_DEVICES=1`), driven by `scripts/eval_llama_server.py`, `--no-thinking`.
+(`HIP_VISIBLE_DEVICES=1`), driven by [`scripts/eval_llama_server.py`](../scripts/eval_llama_server.py), `--no-thinking`.
 Smoke: **5/5 PASS** (coherent: `Paris`, `51`, `ternary.`), ~0.4–0.9 s/reply.
 
 Paired A/B, **124 turns compared** (107 first-mention and 10 no-fact turns
@@ -196,13 +196,13 @@ context, while `FIFO` feeds a plain sliding window of the most recent tokens.
    protocol.
 2. **Our own ternary artifact is a training problem — fully localized,
    deliberately not chased.** Every non-training route was eliminated
-   (F1–F4, F6, F7); the ~8% residual that carries the quality is trained weight
+   ([F1–F4](FAILURES.md#summary), [F6](FAILURES.md#f6--student-stream-block-wise-kd-dead-end), [F7](FAILURES.md#f7--teacher-forced-block-wise-kd-dead-end)); the ~8% residual that carries the quality is trained weight
    movement, so end-to-end QAT/KD at 27B is the only remaining lever. It is
    known and priced (a real corpus plus a 1×48–80 GB rental or a large local
    pilot) and was not funded, because the result it would reproduce is already
    public and shipped via Track B. What is proven is *where* the gap is, not
    that the recipe reproduces Prism's numbers (F5).
-3. **The rotation basis and format are fully mapped** and reusable (F1–F4 do
+3. **The rotation basis and format are fully mapped** and reusable ([F1–F4](FAILURES.md#summary) do
    not invalidate the container facts in §2 — they invalidate the shortcut of
    filling that container with public PTQ weights).
 4. **The memory layer is a modest, measurable win on context fidelity**, not a
@@ -251,13 +251,13 @@ commit hashes cited throughout (`5eac0c0` T31, `cfea698` T30, `ea089e2` T27,
 
 ## 9. Open items and risks
 
-- **F13 (open bug):** `oracle.decode_q2_0_g64` (type 42) decodes garbage; fix
-  when next touching `bonsai_forensics/oracle.py`. Not on the 27B path.
+- [**F13 (open bug)**](FAILURES.md#f13--oracledecode_q2_0_g64-decodes-garbage): `oracle.decode_q2_0_g64` (type 42) decodes garbage; fix
+  when next touching [`bonsai_forensics/oracle.py`](../bonsai_forensics/oracle.py). Not on the 27B path.
 - **Artifact dependency (Track B):** the shipped capability relies on Prism's
   released `PQ2_0` weights and their terms; if that artifact were withdrawn or
-  restricted, the capability would have to be rebuilt. F5 is the map for that
+  restricted, the capability would have to be rebuilt. [F5](FAILURES.md#f5--the-last-8-was-localized-to-end-to-end-qat-and-deliberately-not-funded) is the map for that
   rebuild (end-to-end QAT/KD at 27B), but it has not been demonstrated.
-- **Pending, out of scope here:** head-to-head A/B (`scripts/run_ab.sh`), the
+- **Pending, out of scope here:** head-to-head A/B, the
   50-conversation eval, LoRA adaptation around the released weights, and the
   BF16 reference download.
 

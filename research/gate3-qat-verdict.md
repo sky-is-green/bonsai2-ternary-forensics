@@ -26,13 +26,13 @@ against Prism's released 1.7B PQ2_0 trits (byte-exact decode vs their F16 dequan
 | codes moved by noise | 4.28% |
 
 Noise changes 4.3% of the codes and changes agreement by **+0.003 pp** — no effect.
-(Side finding: the T7 `Q2_0_g64` decoder in `oracle.py` decodes garbage; T7's 0.612
+(Side finding: the T7 `Q2_0_g64` decoder in [`oracle.py`](../bonsai_forensics/oracle.py) decodes garbage; T7's 0.612
 actually came from the F16 dequant. PQ2_0 decode is byte-exact.)
 
 ## Experiment 2 — real 27B Hessians from a 4-layer prefix
 
 No 55 GB residency needed: layers 0–3 + embedding were loaded alone (55 tensors,
-`prefix27.py`), real Shakespeare windows, float32 Hessians on the *original* norm
+[`prefix27.py`](../scripts/gate3/prefix27.py)), real Shakespeare windows, float32 Hessians on the *original* norm
 output. For each tensor the weight was layout-adjusted (T30) and rotated with the
 explicit signs; Hessian rotated `R H Rᵀ`; GPTQ ran in that basis.
 
