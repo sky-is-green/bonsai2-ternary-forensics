@@ -1,0 +1,15 @@
+# TBR calibration arm B (entropy-selected) — spec tbr-1.0 §4 (hash c3ef601e...)
+# Same corpus, sample count and token budget as A; windows ranked by mean
+# next-token Shannon entropy (base FP16 model + base tokenizer), top-N picked
+# with a seeded tie-break. Ranking evidence is emitted in the run log.
+kind: B
+seed: 1337
+samples_per_kind: 512
+seq_len: 2048
+corpus_paths: []
+canary_count: 32
+canary_tokens_per_seq: 64
+canary_marker: "<<TBR-CANARY:{i:02d}>>"
+canary_alphabet: ["一键", "旋转", "量化", "校准", "记忆", "三值"]
+entropy_metric: mean_next_token_shannon_over_positions
+entropy_selection: top_n_by_mean_entropy_seeded_tiebreak

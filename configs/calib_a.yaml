@@ -1,0 +1,12 @@
+# TBR calibration arm A (control) — spec tbr-1.0 §4 (hash c3ef601e...)
+kind: A
+seed: 1337
+samples_per_kind: 512
+seq_len: 2048
+corpus_paths: []          # pinned at rental provisioning; hashes land in the run log
+canary_count: 32
+canary_tokens_per_seq: 64
+canary_marker: "<<TBR-CANARY:{i:02d}>>"
+canary_alphabet: ["一键", "旋转", "量化", "校准", "记忆", "三值"]
+entropy_metric: mean_next_token_shannon_over_positions
+entropy_selection: top_n_by_mean_entropy_seeded_tiebreak

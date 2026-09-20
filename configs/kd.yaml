@@ -1,0 +1,22 @@
+# T17 — KD corpus + FP16 teacher top-k logits cache (wire contract: kd_data.py).
+#
+# Pin/verify corpus hashes with:
+#   python -m bonsai_forensics.kd_data --config configs/kd.yaml --hash-files
+# Dry-run:
+#   python -m bonsai_forensics.kd_data --config configs/kd.yaml --dry-run
+#
+# The 27B KD corpus selection is a separate decision: extend `corpus` with the
+# real pinned files before a full run. The canary file below keeps the cache
+# pipeline runnable end to end until then.
+corpus:
+  - path: artifacts/canary/tinyshakespeare.txt
+    sha256: 86c4e6aa9db7c042ec79f339dcb96d42b0075e16b8fc2e86bf0ca57e2dc565ed
+seq_len: 2048
+stride: 2048
+top_k: 64
+shard_windows: 128
+dtype: float16
+model:
+  repo: Qwen/Qwen3.8-27B
+  revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
+output: artifacts/kd-cache

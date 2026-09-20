@@ -1,0 +1,11 @@
+# Core analysis + tests. CPU wheels are enough for the offline suite.
+numpy>=1.26
+pyyaml>=6.0
+pytest>=8.0
+
+# Needed for the GPU / model-dependent scripts (Hessian capture, QAT/KD pilots).
+# On ROCm install torch from the ROCm index instead of PyPI, e.g.:
+#   pip install torch --index-url https://download.pytorch.org/whl/rocm6.2
+torch>=2.0
+transformers>=4.40
+datasets>=2.18

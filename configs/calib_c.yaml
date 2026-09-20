@@ -1,0 +1,14 @@
+# TBR calibration arm C (canary-injected) — spec tbr-1.0 §4 (hash c3ef601e...)
+# Same as A plus `canary_count` deterministic canary sequences at the head of
+# the stream; canary windows are excluded from eval corpora by marker scan.
+kind: C
+seed: 1337
+samples_per_kind: 512
+seq_len: 2048
+corpus_paths: []
+canary_count: 32
+canary_tokens_per_seq: 64
+canary_marker: "<<TBR-CANARY:{i:02d}>>"
+canary_alphabet: ["一键", "旋转", "量化", "校准", "记忆", "三值"]
+entropy_metric: mean_next_token_shannon_over_positions
+entropy_selection: top_n_by_mean_entropy_seeded_tiebreak

@@ -1,0 +1,31 @@
+# T9 — tiny-model canary / dry-run config (T10 reuses this schema for 1.7B).
+# Paths are relative to the repo root; T12/T13 override run_dir/artifact for
+# rented runs and fill corpus_paths with the pinned corpus.
+task_id: T9
+model:
+  name: Qwen/Qwen3.8-0.6B
+  revision: main
+  architecture: qwen3
+rotation:
+  seed: 1337
+  domain: hidden
+quant:
+  group_size: 256
+  damp: 0.01
+  act_order: false
+  block_size: 128
+  refine_iters: 4
+calibration:
+  kind: A
+  seed: 1337
+  samples_per_kind: 512
+  seq_len: 2048
+  corpus_paths: []
+output:
+  run_dir: artifacts/runs/0.6b-a
+  artifact: artifacts/0.6b-a.gguf
+  alignment: 32
+device: cpu
+thresholds:
+  kld_max_vs_fp16: 0.5
+  sign_agreement_min: 0.7

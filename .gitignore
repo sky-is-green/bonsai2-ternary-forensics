@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environments
+.venv/
+venv/
+env/
+
+# Model weights + generated artifacts (never redistributed here)
+artifacts/
+models/
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.npy
+*.npz
+*.ckpt
+
+# Runtime / logs / reports
+logs/
+*.log
+runs/
+reports/
+harness_state*/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~

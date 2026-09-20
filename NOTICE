@@ -1,0 +1,31 @@
+bonsai-ternary-forensics
+Copyright 2026 the bonsai-ternary-forensics contributors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This project is an independent forensic study. It is not affiliated with,
+endorsed by, or supported by Prism ML, Alibaba Cloud, or ThakiCloud.
+
+Third-party components and attributions:
+
+1. Bonsai 2 27B (the analyzed model)
+   Copyright 2026-present Prism ML, Inc.
+   Released under the Apache License, Version 2.0.
+   https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf
+   Attribution (as requested in their NOTICE): "Created using Bonsai by Prism ML."
+   We analyze the released weights only; this repository redistributes no weights.
+
+2. Qwen3.8-27B (the base model Bonsai 2 is derived from)
+   Copyright 2026 Alibaba Cloud.
+   Released under the Apache License, Version 2.0.
+   https://huggingface.co/Qwen/Qwen3.8-27B
+
+3. ThakiCloud/bonsai-1bit-repro
+   The public PTQ reference implementation reproduced by
+   bonsai_forensics/reference.py is ported from ThakiCloud's scripts/quip.py.
+   Copyright ThakiCloud. Licensed under the Apache License, Version 2.0.
+   https://github.com/ThakiCloud/bonsai-1bit-repro
+
+4. Prism ML llama.cpp fork (runtime used for evaluation)
+   MIT License. https://github.com/PrismML-Eng/llama.cpp
+   Based on ggml / llama.cpp, Copyright 2023-2026 The ggml authors, MIT License.
