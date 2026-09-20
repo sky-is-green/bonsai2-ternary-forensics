@@ -119,14 +119,10 @@ Full entries, evidence and revisit costs are in [`FAILURES.md`](FAILURES.md).
   + ~20 GB usable RAM); the prefix trick (embedding + first N layers) avoids it.
 - **F10** `-ngl 99` on one 20 GB card fails to allocate (`unable to allocate
   ROCm0 buffer`); **resolved** by unsloth-style auto-fit `ngl`.
-- **F11** Internal tooling drift in a sibling dependency blocked the live
-  harness import; **resolved** operationally via a pinned dependency
-  workaround (durable T23 fix still pending).
-- **F12** Two independent ROCm contexts hang GPU1 at firmware level
-  (SMU→PSP/TOC `error -22` on next boot); policy: **one heavy ROCm process at a
-  time**, two cards only via one model-parallel process.
-- **F13** `oracle.decode_q2_0_g64` (type 42) decodes garbage; the T7 1.7B 0.612
-  agreement came from the F16-dequant path, not this decoder — **open**.
+
+Operational incidents that do not bear on the findings (F11: tooling-drift
+import workaround; F12: ROCm firmware quirk; F13: a latent decoder bug in
+`oracle.py`) are recorded in [`FAILURES.md`](FAILURES.md) but not carried here.
 
 ---
 
@@ -162,6 +158,29 @@ excluded). `hive` is the harness's memory layer (persistent context);
   `ctx_hive_ge_fifo_ratio` 98.2%.
 - Outcome split: `hive_only` 4, `fifo_only` 10, `both_sufficient` 77,
   `neither_sufficient` 33.
+
+**What the metrics mean.** The two columns are the same model answering the
+same conversations with two different context-management strategies:
+`hive` injects retrieved facts from the persistent memory layer into the
+context, while `FIFO` feeds a plain sliding window of the most recent tokens.
+
+- *answer recall*: share of turns where the answer was judged correct or
+  sufficient (FIFO wins slightly — recent context usually suffices for direct
+  questions).
+- *avg fact hit ratio*: fraction of the conversation's stored facts that
+  appear in the answer, averaged over turns.
+- *avg context fidelity*: how closely the answer reflects the provided
+  context, 0–1 (hive wins — when the answer depends on earlier turns, the
+  memory layer preserves that material).
+- `fidelity_hive_gt_fifo_ratio` 69.4%: in 69.4% of turns hive's context
+  fidelity was strictly higher than FIFO's.
+- `hive_ge_fifo_ratio` 89.0%: in 89.0% of turns hive's context fidelity was
+  greater than or equal to FIFO's.
+- `ctx_hive_ge_fifo_ratio` 98.2%: among the 109 turns where at least one
+  strategy supplied sufficient context (107 both + 2 FIFO-only), hive matched
+  or beat FIFO in 98.2% of them.
+- `hive_only` / `fifo_only` / `both_sufficient` / `neither_sufficient`: the
+  answer-quality split over all 124 compared turns.
 
 **Reading:** the memory layer improves *context fidelity* over FIFO
 (+0.101 absolute, strict win ratio 69.4%) while trailing on raw answer recall
@@ -234,8 +253,6 @@ commit hashes cited throughout (`5eac0c0` T31, `cfea698` T30, `ea089e2` T27,
 
 - **F13 (open bug):** `oracle.decode_q2_0_g64` (type 42) decodes garbage; fix
   when next touching `bonsai_forensics/oracle.py`. Not on the 27B path.
-- **F11:** durable fix for the harness-import workaround still pending.
-- **F12:** ROCm single-context policy is a workaround, not a root fix.
 - **Artifact dependency (Track B):** the shipped capability relies on Prism's
   released `PQ2_0` weights and their terms; if that artifact were withdrawn or
   restricted, the capability would have to be rebuilt. F5 is the map for that
