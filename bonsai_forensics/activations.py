@@ -3,7 +3,7 @@
 `run_quant`'s GPTQ path needs `TensorSource.hessian(name)` to return `XᵀX/N`
 over calibration activations (spec §1.3). The safetensors source returns `None`,
 so without this module every real run silently degrades to plain RTN — the exact
-gap HIVE-PLAN T24 closes.
+gap project records T24 closes.
 
 Design:
 

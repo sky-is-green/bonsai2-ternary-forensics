@@ -1,6 +1,6 @@
 """T2 — rotation definition, orthogonality, and absorbed-model equivalence.
 
-Acceptance (HIVE-PLAN.md §5): `R·Rᵀ = I` (≤1e-5); absorbed output ==
+Acceptance (project records §5): `R·Rᵀ = I` (≤1e-5); absorbed output ==
 reference output on a random two-layer stack (≤1e-4); handles 5120/10240.
 Synthetic tensors only — no GPU, no downloads.
 

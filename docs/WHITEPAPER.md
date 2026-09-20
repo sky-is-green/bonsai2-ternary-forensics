@@ -18,13 +18,13 @@ expanded only in the register.
 
 Replicate PrismML's **Bonsai-2 27B** achievement on `Qwen/Qwen3.8-27B`: true
 end-to-end ternary weights (~2 bpw, `{−1,0,+1}`), runnable on 2× RX 7900 XT via
-the Prism ROCm fork, evaluated inside hivebench.
+the Prism ROCm fork, evaluated with our evaluation harness.
 
-The programme-level acceptance gate (HIVE-PLAN §0, T20) was:
+The programme-level acceptance gate (project records §0, T20) was:
 
 1. GGUF ≤ 8.0 GB that loads on `gfx1100`; ≥60 tok/s tg128.
 2. KLD ≤ 2× Bonsai-2 `PQ2_0`, same corpus/binary/day.
-3. hivebench A/B: no category regression >2 points vs the released Prism arm;
+3. harness A/B: no category regression >2 points vs the released Prism arm;
    offline suite green.
 4. Ablation report (A/B/C) with fixed-seed evidence.
 5. Reproducible from pinned hashes; run-log records cost/GPU-hours/config hash.
@@ -70,10 +70,10 @@ Two tracks were considered:
   (1,270×; F4), and the 1.7B QAT/KD proof reached 1.103× / 90.6% retention,
   short of the ≥97% mission target and corpus-limited (F5).
 - **Track B — run Prism's released `PQ2_0` on the Prism ROCm fork and evaluate
-  it in hivebench.** This is the pragmatic end-state and the shipped result.
+  it with our harness.** This is the pragmatic end-state and the shipped result.
 
 Track B is the deliverable: the released 27B runs on **one** RX 7900 XT at
-39.6 t/s, and the hivebench memory layer measurably improves context fidelity
+39.6 t/s, and our harness's memory layer measurably improves context fidelity
 over a FIFO baseline (§5). Track A is not abandoned as a *research* direction —
 it is simply a training problem, not a quantization one, and no local per-layer
 KD variant solved it (F6, F7).
@@ -119,8 +119,8 @@ Full entries, evidence and revisit costs are in [`FAILURES.md`](FAILURES.md).
   + ~20 GB usable RAM); the prefix trick (embedding + first N layers) avoids it.
 - **F10** `-ngl 99` on one 20 GB card fails to allocate (`unable to allocate
   ROCm0 buffer`); **resolved** by unsloth-style auto-fit `ngl`.
-- **F11** Sibling `strata-memory` drift (`cortex.config.StrataConfig` gone)
-  blocked live harness import; **resolved** operationally via the F6 pin
+- **F11** Internal tooling drift in a sibling dependency blocked the live
+  harness import; **resolved** operationally via a pinned dependency
   workaround (durable T23 fix still pending).
 - **F12** Two independent ROCm contexts hang GPU1 at firmware level
   (SMU→PSP/TOC `error -22` on next boot); policy: **one heavy ROCm process at a
@@ -138,18 +138,19 @@ Full entries, evidence and revisit costs are in [`FAILURES.md`](FAILURES.md).
 | **T31 / Gate 2** | What does the residual cost? | A byte-controlled swap of all **402** `PQ2_0` payloads for rotate+absmean RTN of the public base collapses PPL **18.5851 → 23,606 (1,270×)**. Metadata/exemptions stay byte-identical; 402/402 post-patch SHA-256 verified. |
 | **T32 / Gate 3** | Quantizer trick or trained weights? | **Trained weights.** SCR +0.003 pp (F3); GPTQ/H-variants all move codes away (RTN 0.9145 vs 0.8086–0.8497, F2); their codes' activation-weighted error is 1.072× RTN's. The reverse-engineering track is closed. |
 | **T28** | Can local QAT/KD close the gap? | 1.7B reached **1.103×** held-out (bar 1.44×) — 90.6% retention; run3 overfit at 7k steps on a 301k-token corpus. This is the last lever: the ~8% residual is trained weights (Gates 2–3), so end-to-end QAT is the only route to Prism's exact acceptance — known, priced, deliberately not run (F5). |
-| **T29** | Ship the released model. | Served on the Prism fork, smoke **5/5**, hivebench eval below. |
+| **T29** | Ship the released model. | Served on the Prism fork, smoke **5/5**, harness evaluation below. |
 
 ---
 
-## 6. Hivebench evaluation (T29)
+## 6. Evaluation (T29)
 
 Released `Ternary-Bonsai-2-27B-PQ2_0` served by the Prism fork on GPU1
-(`HIP_VISIBLE_DEVICES=1`), driver `bonsai_forensics_eval.py`, `--no-thinking`.
+(`HIP_VISIBLE_DEVICES=1`), driven by `scripts/eval_llama_server.py`, `--no-thinking`.
 Smoke: **5/5 PASS** (coherent: `Paris`, `51`, `ternary.`), ~0.4–0.9 s/reply.
 
 Paired A/B, **124 turns compared** (107 first-mention and 10 no-fact turns
-excluded):
+excluded). `hive` is the harness's memory layer (persistent context);
+`FIFO` is the plain sliding-context-window baseline:
 
 | Metric | hive | FIFO |
 |---|---|---|
@@ -191,7 +192,7 @@ excluded):
    written for *our own* artifact and is only partly satisfiable by Track B:
    item 1 (size/load) passes but throughput is **39.6 t/s, below the 60 t/s
    target**; item 2 (KLD vs Bonsai) is satisfied trivially because the shipped
-   model *is* Bonsai; item 3 (hivebench A/B vs the Prism arm) is **not run**
+   model *is* Bonsai; item 3 (harness A/B vs the Prism arm) is **not run**
    (out of scope here); item 4 (A/B/C ablation) was never reached because the
    PTQ runs it depends on are blocked; item 5 (regenerate our own artifact) is
    not met. This paper does not claim the T20 gate was passed.
@@ -223,7 +224,7 @@ redistributed): `artifacts/gate1/gate1-report.json`,
 `artifacts/gate3/{scr-report.json,prefix27/}`,
 `artifacts/recover/run1/recover-report*.json`.
 
-The gate work was originally done in the local `hivebench` repository; the
+The gate work was originally done in a private working repository; the
 commit hashes cited throughout (`5eac0c0` T31, `cfea698` T30, `ea089e2` T27,
 `8cd8038` T7, `64ff7bc` T28, `aaddd0b` T29 docs) are provenance from there.
 
@@ -233,8 +234,7 @@ commit hashes cited throughout (`5eac0c0` T31, `cfea698` T30, `ea089e2` T27,
 
 - **F13 (open bug):** `oracle.decode_q2_0_g64` (type 42) decodes garbage; fix
   when next touching `bonsai_forensics/oracle.py`. Not on the 27B path.
-- **F11:** T23 durable sibling-compat fix still pending; live harness imports
-  currently require the F6 pin.
+- **F11:** durable fix for the harness-import workaround still pending.
 - **F12:** ROCm single-context policy is a workaround, not a root fix.
 - **Artifact dependency (Track B):** the shipped capability relies on Prism's
   released `PQ2_0` weights and their terms; if that artifact were withdrawn or

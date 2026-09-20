@@ -1,4 +1,4 @@
-"""T5 — calibration corpus builders A/B/C (spec §4, HIVE-PLAN.md §9).
+"""T5 — calibration corpus builders A/B/C (spec §4, project records §9).
 
 - A (control): seeded uniform sample of the pinned corpus.
 - B (framework): same candidate pool and budget; windows ranked by

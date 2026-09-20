@@ -33,7 +33,7 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
 | F8 | (a)/(b) | Entropy/excess-loss selection lost to random: 172.3 vs 115.9 PPL | Falsified (pilot) | closed | Yes — larger pool/seeds |
 | F9 | (b)/(c) | 27B full-model offload swap-thrashes (55.6 GB vs 40 GB VRAM + ~20 GB RAM) | Mitigated | resolved | No |
 | F10 | (c) | `-ngl 99` on one 20 GB card fails to allocate; fixed by auto-fit | Resolved | resolved | No |
-| F11 | (c)/(d) | Sibling drift blocks harness import; F6 pin is interim | Mitigated | resolved (fix pending) | Yes — T23 |
+| F11 | (c)/(d) | Internal tooling drift blocked harness imports; pinned dependency workaround is interim | Mitigated | resolved (fix pending) | Yes — T23 |
 | F12 | (c)/(d) | Two ROCm contexts hang GPU1 at firmware level | Mitigated | resolved (policy) | If driver changes |
 | F13 | (d) | `oracle.decode_q2_0_g64` (type 42) decodes garbage | Open | open | Yes — cheap fix |
 
@@ -59,7 +59,7 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
 - **Verdict:** Falsified. The 2.1× exists only when calibration and evaluation
   are the same passage.
 - **Evidence:** commit `ea089e2`; `artifacts/reference/*.json`;
-  `docs/RUN-CANARY.md`; HIVE-PLAN Round 6.
+  `docs/RUN-CANARY.md`; project records Round 6.
 - **Status:** closed.
 - **What it rules out:** PTQ tuning as a route to 27B parity; the published 2.1×
   as an off-calibration quality bar.
@@ -84,7 +84,7 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
   codes *away* from theirs.
 - **Verdict:** Falsified. The quantizer reverse-engineering track is closed.
 - **Evidence:** `artifacts/gate3/prefix27/sweep-layer0.json`;
-  `research/gate3-qat-verdict.md`; HIVE-PLAN Round 12. (T32 was diagnostics-only;
+  `research/gate3-qat-verdict.md`; project records Round 12. (T32 was diagnostics-only;
   no source commit.)
 - **Status:** closed.
 - **What it rules out:** GPTQ/OBQ as the missing mechanism; a GPTQ rental for
@@ -105,7 +105,7 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
   (see F13); T7's 0.612 came from the F16 dequant, not this decoder.
 - **Verdict:** Falsified.
 - **Evidence:** `artifacts/gate3/scr-report.json`;
-  `research/gate3-qat-verdict.md`; HIVE-PLAN Round 12.
+  `research/gate3-qat-verdict.md`; project records Round 12.
 - **Status:** closed.
 - **What it rules out:** calibration noise, dithering and stochastic rounding as
   the source of the residual.
@@ -131,7 +131,7 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
   8% carries the entire gap.
 - **Evidence:** commit `5eac0c0` (T31); `artifacts/gate2/eval-report.json`;
   `artifacts/gate2/rtn-absmean.gguf`; `research/gate2-rtn-quality.md`;
-  HIVE-PLAN Round 11.
+  project records Round 11.
 - **Status:** closed.
 - **What it rules out:** the no-rental rotate+RTN shortcut for parity; trit
   agreement as a standalone quality metric.
@@ -173,8 +173,8 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
   confidence is a localization/inference, not a demonstrated replication.
 - **Evidence:** commit `64ff7bc` (T28);
   `artifacts/recover/run1/recover-report-s5000.json` and
-  `recover-report.json`; bar 1.44× from commit `8cd8038` (T7) / HIVE-PLAN
-  Round 7; HIVE-PLAN Round 9.
+  `recover-report.json`; bar 1.44× from commit `8cd8038` (T7) / project records
+  Round 7; project records Round 9.
 - **Status:** closed by decision (deferred, not eliminated).
 - **What it rules out:** local QAT/KD at 1.7B on a 301k-token corpus as a
   *complete* quality path. It does **not** rule out 27B end-to-end QAT.
@@ -184,7 +184,7 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
 - **Worth re-assessing?** Only if *capability ownership* (rather than using
   Prism's public weights) becomes a requirement.
 - **[rev 2026-09-20] Seed discrepancy:** the handoff seeded F5 as
-  "quality gate failed". HIVE-PLAN Round 9 and the T28 task row record the gate
+  "quality gate failed". project records Round 9 and the T28 task row record the gate
   as **PASSED** (1.103× < 1.44× bar). The defensible failure is at the *mission*
   level (90.6% < 97%), not the T28 gate. This entry records the verified
   reading; see "Seeded-entry verification notes" below.
@@ -210,7 +210,7 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
 - **Verdict:** Dead-end as a standalone route.
 - **Evidence:** `artifacts/pilot/blockwise/blockwise-report.json`,
   `artifacts/pilot/blockwise/eval-bw.log`;
-  `artifacts/CLEANUP.md`; HIVE-PLAN Round 13.
+  `artifacts/CLEANUP.md`; project records Round 13.
 - **Status:** closed.
 - **What it rules out:** per-layer student-stream training as a substitute for
   end-to-end training.
@@ -230,7 +230,7 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
   cannot control global compounding.
 - **Verdict:** Dead-end. Only end-to-end QAT can.
 - **Evidence:** `artifacts/pilot/blockwise_tf/blockwise-tf-report.json`,
-  `artifacts/pilot/blockwise_tf/eval-bw.log`; HIVE-PLAN Round 13.
+  `artifacts/pilot/blockwise_tf/eval-bw.log`; project records Round 13.
 - **Status:** closed.
 - **What it rules out:** per-layer teacher-forced KD as a local substitute for
   end-to-end QAT.
@@ -251,7 +251,7 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
   14.22 vs random 12.50 — the ranking did not isolate better training windows.)
 - **Evidence:** `artifacts/pilot/eval-selected.json`,
   `artifacts/pilot/eval-random.json`,
-  `artifacts/pilot/score-report.json`; HIVE-PLAN Round 13.
+  `artifacts/pilot/score-report.json`; project records Round 13.
 - **Status:** closed (pilot scale).
 - **What it rules out:** this scoring function, at this pool/budget, as a
   data-selection win.
@@ -270,7 +270,7 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
   trick** (load embedding + first N layers only), which avoids 55 GB residency
   and made the Gate-3 Hessians possible.
 - **Verdict:** Full-model offload is not viable on this box.
-- **Evidence:** HIVE-PLAN Rounds 11–12; `HANDOFF-TBR.md` §6;
+- **Evidence:** project records Rounds 11–12; `project handoff` §6;
   `artifacts/base27/` (52 GiB on disk); `artifacts/CLEANUP.md`.
 - **Status:** resolved (workaround adopted).
 - **What it rules out:** full 27B residency/offload for local diagnostics.
@@ -290,31 +290,30 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
   ~10% VRAM headroom minus the f16 KV cache) plus an OOM pre-flight guard.
 - **Evidence:** `logs/llama_server_8090.log:2912–2913`; commit `a52aace`
   (`harness/models.py`, `fit_gpu_layers` at line 379); commit `abe76d3`
-  (OOM guard); HIVE-PLAN hardening series.
+  (OOM guard); project records hardening series.
 - **Status:** resolved.
 - **What it rules out:** blind `-ngl 99` on a single card; naive context sizing.
 - **Cost to revisit:** none.
 - **Worth re-assessing?** No.
 
-## F11 — Sibling `strata-memory` drift blocks live harness import
+## F11 — Internal tooling drift blocked harness imports
 
 - **Category:** (c)/(d) resolved incident + open durable fix.
-- **Claim/hypothesis:** hivebench's live harness can import the sibling
-  `strata-memory` package against current `main`.
-- **Method:** Repo-wide collection against the sibling checkout.
-- **Outcome:** Collection fails: `cortex.config.StrataConfig` / `cortex.strata`
-  no longer exist after the sibling's `strata` → `splinter` reorganisation.
-  **Resolved operationally** by the F6 pin
-  (`STRATA_HOME=../worktrees/strata-memory/hivebench-STRATA-PIN`,
-  `PYTHONPATH=$PIN/strata`), a detached worktree at the pre-rename P2-DILUTION
-  tip `bc332c1` (unit 561 passed, integration 50 passed + 3 skipped).
+- **Claim/hypothesis:** The evaluation harness could import its tooling
+  dependency against the dependency's current state.
+- **Method:** Repo-wide collection against the dependency checkout.
+- **Outcome:** Collection failed: a configuration class
+  no longer existed after the dependency's
+  internal reorganisation. **Resolved operationally** by pinning the harness
+  to a detached worktree of the dependency at a pre-reorganisation tip
+  (unit 561 passed, integration 50 passed + 3 skipped).
 - **Verdict:** Mitigated; the durable fix is task **T23** (still open).
-- **Evidence:** HIVE-PLAN Round 1 finding F6, Round 2, T23 row;
-  `HANDOFF-TBR.md` §6; `docs/BONSAI-RUNTIME.md` (T23 workaround note).
+- **Evidence:** project records, Round 1 finding F6, Round 2, T23 row;
+  project handoff §6; `docs/BONSAI-RUNTIME.md`.
 - **Status:** resolved operationally; real fix pending.
-- **What it rules out:** importing the sibling at current `main` without the pin.
-- **Cost to revisit:** low–medium (T23 shim: `conftest.py`, `harness/app.py`,
-  `tests/unit/test_repo_layout.py`).
+- **What it rules out:** importing the dependency at its latest state without
+  the pin.
+- **Cost to revisit:** low–medium (T23 shim in the harness).
 - **Worth re-assessing?** Yes — T23.
 
 ## F12 — Two ROCm contexts hang GPU1 at firmware level
@@ -330,8 +329,8 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
 - **Verdict:** Resolved by policy: **one heavy ROCm process at a time**; two
   cards are used only via a single model-parallel process. All GPU work pinned
   to GPU1 (`HIP_VISIBLE_DEVICES=1`; HIP index = PCI order).
-- **Evidence:** HIVE-PLAN Round 13 (crash forensics, second crash);
-  `HANDOFF-TBR.md` §6.
+- **Evidence:** project records Round 13 (crash forensics, second crash);
+  `project handoff` §6.
 - **Status:** resolved (policy), root cause external to this repo.
 - **What it rules out:** independent concurrent ROCm contexts on this driver
   stack.
@@ -355,8 +354,8 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
   (`~/.unsloth/llama.cpp/ggml/src/ggml-common.h:194–199`). The offline test
   (`tests/ternary/test_oracle.py:35`) encodes the same wrong layout, so it is
   self-consistent but not a real validation.
-  `research/gate3-qat-verdict.md` (lines 29–30, 82); `HANDOFF-TBR.md` §7;
-  HIVE-PLAN Round 12.
+  `research/gate3-qat-verdict.md` (lines 29–30, 82); `project handoff` §7;
+  project records Round 12.
 - **Status:** open.
 - **What it rules out:** trusting `Q2_0_g64` agreement numbers from `oracle.py`
   until fixed; using this decoder for the 1.7B oracle comparisons.
@@ -372,7 +371,7 @@ All seeded entries F1–F13 were checked against their sources before writing.
 Results:
 
 - **F5 — contradiction found, then resolved by owner clarification.** The seed
-  says "quality gate failed", but HIVE-PLAN Round 9 ("T28 COMPLETE — quality
+  says "quality gate failed", but project records Round 9 ("T28 COMPLETE — quality
   gate PASSED") and the T28 task row ("gate passed, best 1.103×") both record
   the opposite. Owner clarification: "failed" meant the **mission acceptance
   rate** (we expected to match Prism's retention and chased the last 8%), not
@@ -382,23 +381,23 @@ Results:
   dead-end. This is the only seeded entry whose stated verdict did not survive
   verification unchanged.
 - **F1 — artifact nuance (not a contradiction).** The 2.106× fixed-passage
-  reproduction is attested in commit `ea089e2` and HIVE-PLAN Round 6. The
+  reproduction is attested in commit `ea089e2` and project records Round 6. The
   persisted `artifacts/reference/*.json` files are the *held-out*
   (real-calibration) runs and show the collapse (1178× / 9184× / 34877×); the
   fixed-passage run was not persisted under a matching filename. Both facts
   agree with the reports.
 - **F9 — RAM figures.** The seed's "~20 GB RAM" matches the host's *available*
   RAM (~19 GiB of 30 GiB) and the 14 GB per-job cap used for GPU jobs;
-  HIVE-PLAN §1 lists the raw total as "30 GB RAM (+30 swap)". Not a
+  project records §1 lists the raw total as "30 GB RAM (+30 swap)". Not a
   contradiction, but note the distinction between total and usable RAM.
 - **F2/F3** are recorded as "T32/Gate 3" in the seed; T32 was a diagnostics-only
   round with no source commit — evidence is the `artifacts/gate3/`
-  reports plus the `research/gate3-qat-verdict.md` write-up and HIVE-PLAN R12.
+  reports plus the `research/gate3-qat-verdict.md` write-up and project records R12.
 - **F6/F7/F8** PPL figures were verified directly from the saved eval logs and
   JSONs (1,252,835 / 1,055,018 / 172.28 vs 115.91).
 - **F10** was verified against the actual server log
   (`logs/llama_server_8090.log`), not just the write-up.
-- **F11/F12/F13** are recorded from HIVE-PLAN / `HANDOFF-TBR.md`; F13 was
+- **F11/F12/F13** are recorded from project records / `project handoff`; F13 was
   additionally confirmed against the `oracle.py` source.
 
 No other contradictions were found between the seeded entries and the reports.

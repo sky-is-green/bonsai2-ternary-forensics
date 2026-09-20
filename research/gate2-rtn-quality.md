@@ -1,6 +1,6 @@
 # Gate 2 — quality cost of the 8% trit residual (RTN artifact vs released PQ2_0)
 
-**Task:** T31 (QUEEN, Round 11, 2026-09-20) · **Cost:** $0, local only
+**Task:** T31 (Round 11, 2026-09-20) · **Cost:** $0, local only
 **Module:** `bonsai_forensics/gate2_rtn_artifact.py` (8 offline tests)
 **Evidence:** `artifacts/gate2/{patch-report.json,eval-report.json}`,
 artifact `artifacts/gate2/rtn-absmean.gguf` (7.21 GB)

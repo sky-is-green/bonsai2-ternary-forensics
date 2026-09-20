@@ -5,7 +5,7 @@ Wraps the mainline binary: one run saves base logits
 (`--kl-divergence --kl-divergence-base FNAME`). Output parsing is pinned to
 the format strings in `tools/perplexity/perplexity.cpp` (llama.cpp build
 11030) and tested offline against a fixture, because the local build ships no
-`llama-perplexity` binary yet (QUEEN escalation: rebuild target needed).
+`llama-perplexity` binary yet (escalation pending: rebuild target needed).
 
 The parsed schema is stable and JSON-serializable:
 

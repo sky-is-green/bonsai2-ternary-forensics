@@ -1,8 +1,8 @@
 # Bonsai Runtime (T29) — released Bonsai-2 27B `PQ2_0` on the Prism ROCm fork
 
-Plan-B end-state: run Prism's released ternary artifact as-is and evaluate it with
-hivebench. This is the pragmatic route to the user's goal — the quality lives in
-their trained weights (Gate 3), so no local training is required.
+Plan-B end-state: run Prism's released ternary artifact as-is and evaluate it
+with our harness. This is the pragmatic route to the user's goal — the quality
+lives in their trained weights (Gate 3), so no local training is required.
 
 ## Artifact
 
@@ -10,7 +10,7 @@ their trained weights (Gate 3), so no local training is required.
 |---|---|
 | Model | `artifacts/oracle/bonsai27/Ternary-Bonsai-2-27B-PQ2_0.gguf` (7.2 GB, sha `3907dc16…`) |
 | Fork binary | `artifacts/oracle/prism-fork/bin/llama-prism-b10709-9a9394a/llama-server` |
-| Driver | `bonsai_forensics_eval.py` (T11) |
+| Driver | `scripts/eval_llama_server.py` |
 
 ## Serve / evaluate
 
@@ -26,7 +26,7 @@ HIP_VISIBLE_DEVICES=1 python scripts/eval_llama_server.py smoke \
   `llama-server`; without it the reasoning template returns empty visible content.
 - `HIP_VISIBLE_DEVICES=1` keeps the desktop GPU0 free; the 27B `PQ2_0` fits one
   RX 7900 XT at `-ngl 99`, so both cards are not needed.
-- The original run used a hivebench harness driver; this repository ships the
+- The original run used a private harness driver; this repository ships the
   standalone replacement (`scripts/eval_llama_server.py`) with no harness
   dependency.
 
@@ -34,7 +34,7 @@ HIP_VISIBLE_DEVICES=1 python scripts/eval_llama_server.py smoke \
 
 PPL under the Gate-2 protocol (tinyshakespeare, ctx 512, 8 chunks): **18.5851**.
 
-Hivebench eval, `--max-convs 10`, 124 turns compared:
+Harness evaluation, `--max-convs 10`, 124 turns compared:
 
 | Metric | hive | FIFO |
 |---|---|---|

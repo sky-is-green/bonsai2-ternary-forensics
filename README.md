@@ -121,6 +121,16 @@ causal, but this is not a benchmark suite. We did not run 27B QAT, so we cannot
 claim to reproduce Prism's numbers; we localized the gap and identified the only
 remaining route.
 
+## Provenance
+
+This repository was extracted from a private research project. Task identifiers
+(T30, T31, T32, ...), round numbers, and references to "project records" /
+"project handoff" in the docs and research write-ups refer to that project's
+internal coordination log, which is not published. Commit hashes and artifact
+paths cited as evidence in `docs/FAILURES.md` are provenance from the original
+working repository; the reports in `research/` and the numbers reproduced here
+are the authoritative record. No model weights are redistributed.
+
 ## License and attribution
 
 Apache-2.0 (see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE)). The analyzed

@@ -16,7 +16,7 @@ type-142 artifact is the Prism ROCm fork's job (ADR-2).
 Contract note: this is the R2-verified implementation, not a guessed layout.
 `bonsai_forensics/spec.md` §3.2 still marks PQ2_0 deferred because its
 constants block is hash-frozen (`tbr-1.2`); formalizing it there changes the
-canonical hash and re-pins every consumer, which is a QUEEN hotspot change
+canonical hash and re-pins every consumer, which is a hotspot change
 tracked as a T25 follow-up. No spec file is edited here, so `SPEC_SHA256`
 below matches the frozen hash.
 """

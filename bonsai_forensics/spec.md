@@ -6,11 +6,10 @@
 roles, F16 exemptions are precision-only). **FROZEN** on first consumer (T2 pins
 it in `tests/ternary/test_rotation.py`; every later consumer pins the same
 canonical hash).
-**Owner:** QUEEN (hotspot: single-commit, `HIVE-PLAN.md` §6). **Author:** T1 /
-BEE-BETA. **Plan:** `HIVE-PLAN.md` §4.
+**Owner:** project lead (hotspot: single-commit). **Author:** T1.
 **Provenance:** PrismML Bonsai 2 27B whitepaper §2.1–2.4 (format + disclosures);
 `~/.unsloth/llama.cpp` build 11030 `ggml/src/ggml-quants.c` +
-`ggml/src/ggml-common.h` (TQ2_0 bytes, authoritative); `HIVE-PLAN.md` §1 facts.
+`ggml/src/ggml-common.h` (TQ2_0 bytes, authoritative); project records §1 facts.
 **Canonical hash:** `sha256` of the machine-readable block below, serialized as
 `json.dumps(constants, sort_keys=True, separators=(",", ":"))`. Consumers assert
 this literal in their test:
@@ -29,10 +28,10 @@ against the literal above. Consumer tests pin the same literal.)
 
 1. This file fixes the wire contract for T2–T6: rotation math, ternary codec,
    GPTQ configuration, GGUF block bytes, F16 exemptions, calibration A/B/C,
-   artifact naming. Contract changes are RED (`BEE-BETA.md` §2) and require
-   QUEEN sign-off plus a spec-version bump.
+   artifact naming. Contract changes are RED (project protocol §2) and require
+   project lead sign-off plus a spec-version bump.
 2. Everything here is implementable and testable with synthetic tensors: no
-   GPU, no model download, no network (`HIVE-PLAN.md` §15).
+   GPU, no model download, no network (project records §15).
 3. Where the plan left a free parameter (damp value, entropy metric, canary
    length) this file picks one and freezes it. Deviations are recorded in the
    T1 Log, not silently.
@@ -192,7 +191,7 @@ from `libggml-base.so` via `ctypes` (skip if the library is absent).
 
 Prism's `PQ2_0` g128 layout and ggml type id are **not** public. Until R2
 returns a verified layout, no code writes `PQ2_0`; `oracle.py` degrades to
-KLD-only mode (`HIVE-PLAN.md` §10, T7). Writing a guessed layout is forbidden.
+KLD-only mode (project records §10, T7). Writing a guessed layout is forbidden.
 
 ### 3.3 F16 exemption tensors (precision-only rule, T22)
 

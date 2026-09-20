@@ -49,7 +49,7 @@ Also noted for the 27B export (T12/T13): real GGUFs need HF→GGUF tensor-name
 mapping and tokenizer metadata before llama.cpp can serve the artifact; the
 canary evaluates by round-trip in PyTorch to keep those concerns separate.
 
-## Next (see HIVE-PLAN T27/T28)
+## Next (see project records T27/T28)
 
 - T27: reproduce the ThakiCloud QuIP reference on this base as a working
   quality bar, then diff our GPTQ Hessian/scale/compensation layer-by-layer.

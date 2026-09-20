@@ -2,7 +2,7 @@
 
 The parser is pinned to the format strings in
 `tools/perplexity/perplexity.cpp` (build 11030). The local build ships no
-`llama-perplexity` binary (QUEEN escalation), so command construction,
+`llama-perplexity` binary (escalation pending), so command construction,
 subprocess plumbing, and parsing are exercised with fixtures and fake
 executables; the live KLD run is T10/T13 territory.
 """

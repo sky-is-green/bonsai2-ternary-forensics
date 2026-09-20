@@ -2,7 +2,7 @@
 llama-server (live-gated), cross-validated against gguf-py and libggml.
 
 No GPU, no downloads: the live server test is skipped unless `TBR_LIVE_GGUF=1`
-and the local ROCm build exists (R1 is QUEEN's spike; this test only asserts
+and the local ROCm build exists (R1 was a project spike; this test only asserts
 the format).
 """
 

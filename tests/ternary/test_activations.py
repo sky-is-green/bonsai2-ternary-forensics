@@ -1,7 +1,7 @@
 """T24 — activation capture: Hessians are real, normalized, and loadable.
 
 `SafetensorsTensorSource.hessian()` returns `None`, so without this module real
-runs silently drop out of the GPTQ path (HIVE-PLAN Round 3 note). These tests
+runs silently drop out of the GPTQ path (project records Round 3 note). These tests
 use a hand-built module tree so they stay offline and depend only on torch.
 """
 

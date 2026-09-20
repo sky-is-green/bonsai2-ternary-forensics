@@ -7,8 +7,8 @@ Two modes:
               server down, and write a JSON report.
   perplexity  run ``llama-perplexity`` directly on a corpus and record PPL.
 
-This replaces the hivebench eval driver (which depended on the harness model
-manager). It is intentionally stdlib-only apart from the model binaries.
+This replaces the original evaluation driver (which depended on a private
+harness). It is intentionally stdlib-only apart from the model binaries.
 
 Examples::
 

@@ -1,6 +1,6 @@
 # Gate 3 — is the 8% trit residual a quantizer trick or trained weights?
 
-**Task:** R12 diagnostics (QUEEN, 2026-09-20) · **Cost:** $0, local only
+**Task:** R12 diagnostics (2026-09-20) · **Cost:** $0, local only
 **Scripts:** `artifacts/gate3/scripts/{scr_test,prefix27,sweep27,hobj27}.py`
 **Evidence:** `gate3/scr-report.json`, `gate3/prefix27/{prefix-report,sweep-layer0,h-objective}.json`,
 Hessians in `gate3/prefix27/hessians/` (layers 0+3) and `gate3/hessians-noise5/` (1.7B).

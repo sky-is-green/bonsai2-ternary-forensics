@@ -2,7 +2,7 @@
 
 The v1.0 pipeline stored hidden norms with their γ and absorbed rotation around
 them, which changes the function: `R(γ⊙z) ≠ γ⊙(Rz)` (measured 3.99e-01
-relative error vs 1.59e-15 folded, see HIVE-PLAN §14 F1). These tests pin the
+relative error vs 1.59e-15 folded, see project records §14 F1). These tests pin the
 fix: γ folds into every hidden-axis consumer, hidden norms are stored as ones,
 F16-exempt `in_proj_a/b` still absorb `Rᵀ`, and a reference forward matches.
 """

@@ -1,4 +1,4 @@
-"""TBR ternary pipeline (HIVE-PLAN.md §3). Synthetic-tensor, offline-first."""
+"""TBR ternary pipeline (project records §3). Synthetic-tensor, offline-first."""
 
 from pathlib import Path
 

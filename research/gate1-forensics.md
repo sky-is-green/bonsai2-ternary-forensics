@@ -1,6 +1,6 @@
 # Gate-1 forensics — does rotate+RTN in Prism's basis reproduce the released trits?
 
-**Task:** T30 (QUEEN, Round 10, 2026-09-20) · **Cost:** $0, local only
+**Task:** T30 (Round 10, 2026-09-20) · **Cost:** $0, local only
 **Module:** `bonsai_forensics/gate1_forensics.py` (16 offline tests)
 **Report:** `artifacts/gate1/gate1-report.json` (26 tensors, layers 0/3/62/63)
 **Base shards:** `artifacts/base27/model-00001/000017-of-00018.safetensors` (6.1 GB)
@@ -61,7 +61,7 @@ artifact; the next lever is still recovery/hessians, now in the correct basis.
    Signature: GPTQ/OBQ error compensation initialized from absmean RTN and/or
    QAT of the same base. This is the proprietary step.
 
-## Implications (decision inputs for QUEEN)
+## Implications (decision inputs for the project lead)
 
 - **No-rental hypothesis (R9 handoff §7): partially falsified.** Local
   rotate+RTN in their basis reproduces the container, basis and ~92% of trits,
@@ -73,7 +73,7 @@ artifact; the next lever is still recovery/hessians, now in the correct basis.
   report) with calibration Hessians (T24/T17). Hessians need teacher forwards
   -> the 55.6 GB memory math stands (4x24 GB or offload). The QAT route (T28)
   now also gets a much better start (absmean RTN in their basis, not ours).
-- **Spec/quantizer follow-up (QUEEN hotspot):** if we want our pipeline closer
+- **Spec/quantizer follow-up (project hotspot):** if we want our pipeline closer
   to Prism, the LS refinement in `quant.py` should be optional/off for
   PQ2_0-class runs; absmean RTN dominates on this artifact.
 - **Layout follow-up:** `run_quant`/`pack_gguf` must reproduce the observed
