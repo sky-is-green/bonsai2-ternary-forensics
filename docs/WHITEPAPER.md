@@ -120,8 +120,8 @@ Full entries, evidence and revisit costs are in [`FAILURES.md`](FAILURES.md).
 - [**F10**](FAILURES.md#f10---ngl-99-allocation-failure-on-one-20-gb-card) `-ngl 99` on one 20 GB card fails to allocate (`unable to allocate
   ROCm0 buffer`); **resolved** by unsloth-style auto-fit `ngl`.
 
-Operational incidents that do not bear on the findings ([F11](FAILURES.md#f11--internal-tooling-drift-blocked-harness-imports): tooling-drift
-import workaround; [F12](FAILURES.md#f12--two-rocm-contexts-hang-gpu1-at-firmware-level): ROCm firmware quirk; [F13](FAILURES.md#f13--oracledecode_q2_0_g64-decodes-garbage): a latent decoder bug in
+Operational incidents that do not bear on the findings ([U1](FAILURES.md#u1--internal-tooling-drift-blocked-harness-imports): tooling-drift
+import workaround; [U2](FAILURES.md#u2--two-rocm-contexts-hang-gpu1-at-firmware-level): ROCm firmware quirk; [U3](FAILURES.md#u3--oracledecode_q2_0_g64-decodes-garbage): a latent decoder bug in
 [`oracle.py`](../bonsai_forensics/oracle.py)) are recorded in [`FAILURES.md`](FAILURES.md) but not carried here.
 
 ---
@@ -251,7 +251,7 @@ commit hashes cited throughout (`5eac0c0` T31, `cfea698` T30, `ea089e2` T27,
 
 ## 9. Open items and risks
 
-- [**F13 (open bug)**](FAILURES.md#f13--oracledecode_q2_0_g64-decodes-garbage): `oracle.decode_q2_0_g64` (type 42) decodes garbage; fix
+- [**U3 (open bug)**](FAILURES.md#u3--oracledecode_q2_0_g64-decodes-garbage): `oracle.decode_q2_0_g64` (type 42) decodes garbage; fix
   when next touching [`bonsai_forensics/oracle.py`](../bonsai_forensics/oracle.py). Not on the 27B path.
 - **Artifact dependency (Track B):** the shipped capability relies on Prism's
   released `PQ2_0` weights and their terms; if that artifact were withdrawn or

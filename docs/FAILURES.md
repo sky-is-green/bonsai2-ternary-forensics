@@ -5,8 +5,13 @@
 > recorded so it can be re-assessed objectively later.
 
 **Created:** 2026-09-20 (initial seeding from Rounds 1–13).
-**Policy:** append-only. New entries get a new `F<n>` and a timestamp; existing
+**Policy:** append-only. New entries get a new id and a timestamp; existing
 entries are never rewritten — corrections are appended as `[rev <date>]` notes.
+
+**Two series.** `F1`–`F10` are the load-bearing falsifications referenced by the
+white paper ([`docs/WHITEPAPER.md`](WHITEPAPER.md)). `U1`–`U3` are **unrelated**
+items — operational incidents and a latent bug that do not bear on the findings
+— recorded here for completeness and re-assessability only.
 
 ## Categories
 
@@ -33,9 +38,12 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
 | [F8](#f8--entropyexcess-loss-data-selection-lost-to-random) | (a)/(b) | Entropy/excess-loss selection lost to random: 172.3 vs 115.9 PPL | Falsified (pilot) | closed | Yes — larger pool/seeds |
 | [F9](#f9--27b-full-model-cpu-offload-swap-thrashes) | (b)/(c) | 27B full-model offload swap-thrashes (55.6 GB vs 40 GB VRAM + ~20 GB RAM) | Mitigated | resolved | No |
 | [F10](#f10---ngl-99-allocation-failure-on-one-20-gb-card) | (c) | `-ngl 99` on one 20 GB card fails to allocate; fixed by auto-fit | Resolved | resolved | No |
-| [F11](#f11--internal-tooling-drift-blocked-harness-imports) | (c)/(d) | Internal tooling drift blocked harness imports; pinned dependency workaround is interim | Mitigated | resolved (fix pending) | Yes — T23 |
-| [F12](#f12--two-rocm-contexts-hang-gpu1-at-firmware-level) | (c)/(d) | Two ROCm contexts hang GPU1 at firmware level | Mitigated | resolved (policy) | If driver changes |
-| [F13](#f13--oracledecode_q2_0_g64-decodes-garbage) | (d) | `oracle.decode_q2_0_g64` (type 42) decodes garbage | Open | open | Yes — cheap fix |
+| [U1](#u1--internal-tooling-drift-blocked-harness-imports) | (c)/(d) | Internal tooling drift blocked harness imports; pinned dependency workaround is interim | Mitigated | resolved (fix pending) | Yes — T23 |
+| [U2](#u2--two-rocm-contexts-hang-gpu1-at-firmware-level) | (c)/(d) | Two ROCm contexts hang GPU1 at firmware level | Mitigated | resolved (policy) | If driver changes |
+| [U3](#u3--oracledecode_q2_0_g64-decodes-garbage) | (d) | `oracle.decode_q2_0_g64` (type 42) decodes garbage | Open | open | Yes — cheap fix |
+
+`U1`–`U3` are unrelated to the white-paper findings (operational incidents and
+a latent bug); they are recorded for completeness only.
 
 ---
 
@@ -102,7 +110,7 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
 - **Outcome:** RTN 0.61196; GPTQ clean 0.61771; GPTQ noise5 **0.61774**;
   noise moved 4.28% of codes; agreement change **+0.003 pp**. No effect.
   Side finding: the `Q2_0_g64` (type 42) decoder in [`oracle.py`](../bonsai_forensics/oracle.py) decodes garbage
-  (see [F13](#f13--oracledecode_q2_0_g64-decodes-garbage)); T7's 0.612 came from the F16 dequant, not this decoder.
+  (see [U3](#u3--oracledecode_q2_0_g64-decodes-garbage)); T7's 0.612 came from the F16 dequant, not this decoder.
 - **Verdict:** Falsified.
 - **Evidence:** `artifacts/gate3/scr-report.json`;
   [`research/gate3-qat-verdict.md`](../research/gate3-qat-verdict.md); project records Round 12.
@@ -296,9 +304,9 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
 - **Cost to revisit:** none.
 - **Worth re-assessing?** No.
 
-## F11 — Internal tooling drift blocked harness imports
+## U1 — Internal tooling drift blocked harness imports
 
-- **Category:** (c)/(d) resolved incident + open durable fix.
+- **Category:** (c)/(d) resolved incident + open durable fix — **unrelated to the white-paper findings**.
 - **Claim/hypothesis:** The evaluation harness could import its tooling
   dependency against the dependency's current state.
 - **Method:** Repo-wide collection against the dependency checkout.
@@ -316,9 +324,9 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
 - **Cost to revisit:** low–medium (T23 shim in the harness).
 - **Worth re-assessing?** Yes — T23.
 
-## F12 — Two ROCm contexts hang GPU1 at firmware level
+## U2 — Two ROCm contexts hang GPU1 at firmware level
 
-- **Category:** (c)/(d) resolved incident + standing risk.
+- **Category:** (c)/(d) resolved incident + standing risk — **unrelated to the white-paper findings**.
 - **Claim/hypothesis:** Two independent ROCm processes can run on the two cards
   concurrently.
 - **Method:** Ran a concurrent scorer + block-trainer (then a batch-4 scoring
@@ -337,9 +345,9 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
 - **Cost to revisit:** none unless the driver/firmware stack changes.
 - **Worth re-assessing?** Only on a driver/ROCm upgrade.
 
-## F13 — `oracle.decode_q2_0_g64` decodes garbage
+## U3 — `oracle.decode_q2_0_g64` decodes garbage
 
-- **Category:** (d) open bug/risk.
+- **Category:** (d) open bug/risk — **unrelated to the white-paper findings**.
 - **Claim/hypothesis:** The type-42 `Q2_0_g64` decoder in [`oracle.py`](../bonsai_forensics/oracle.py) reads
   mainline 18-byte g64 blocks correctly.
 - **Method:** Cross-checked decoded 1.7B `Q2_0_g64` tensors against the F16
@@ -367,7 +375,7 @@ entries are never rewritten — corrections are appended as `[rev <date>]` notes
 
 ## Seeded-entry verification notes
 
-All seeded entries F1–F13 were checked against their sources before writing.
+All seeded entries F1–F10 and U1–U3 were checked against their sources before writing.
 Results:
 
 - **F5 — contradiction found, then resolved by owner clarification.** The seed
@@ -397,7 +405,7 @@ Results:
   JSONs (1,252,835 / 1,055,018 / 172.28 vs 115.91).
 - **F10** was verified against the actual server log
   (`logs/llama_server_8090.log`), not just the write-up.
-- **F11/F12/F13** are recorded from project records / `project handoff`; F13 was
+- **U1/U2/U3** are recorded from project records / `project handoff`; U3 was
   additionally confirmed against the [`oracle.py`](../bonsai_forensics/oracle.py) source.
 
 No other contradictions were found between the seeded entries and the reports.
