@@ -228,18 +228,28 @@ def mirror_step(linears, q: float, lr: float, scale: float = 1.0) -> None:
     """Regularizer mirror descent (Algorithm 1, arXiv:2202.10788).
 
     Mirror map psi(w) = (1/q)|w|^q: dual u = sign(w)|w|^(q-1), step in dual
-    space u -= eta*g, map back w = sign(u)|u|^(1/(q-1)). The map itself is the
-    regularizer, so the |w|^q potential must not be added to the loss too.
+    space u -= eta*g_n (per-tensor RMS-normalized gradient), map back
+    w = sign(u)|u|^(1/(q-1)). The map itself is the regularizer, so the |w|^q
+    potential must not be added to the loss too.
+
+    The dual step must be scaled so the equilibrium shell |w*| = (eta)^(1/(q-1))
+    sits at the base weight scale; a raw |g| step swamps u = |w|^(q-1) and
+    diverges (observed: scale 1.0 -> loss nan by step 500). The map runs in
+    float32: the x^7 / x^(1/7) pair amplifies bf16 rounding 7x and drifts the
+    shell upward (bf16: mean|w| 0.025 -> 0.12 over 300 steps; f32: stable).
     """
     eta = lr * scale
     for m in linears:
         g = m.weight.grad
         if g is None:
             continue
-        w = m.weight
-        u = torch.sign(w) * w.abs().pow(q - 1)
-        u = u - eta * g
-        m.weight.copy_(torch.sign(u) * u.abs().clamp_min(1e-30).pow(1.0 / (q - 1)))
+        w32 = m.weight.detach().float()
+        g32 = g.float()
+        g_rms = g32.square().mean().sqrt().clamp_min(1e-12)
+        g_n = g32 / g_rms
+        u = torch.sign(w32) * w32.abs().pow(q - 1)
+        u = u - eta * g_n
+        m.weight.copy_(torch.sign(u) * u.abs().clamp_min(1e-30).pow(1.0 / (q - 1)).to(m.weight.dtype))
 
 
 def run(args) -> dict:
@@ -279,7 +289,8 @@ def run(args) -> dict:
 
     teacher_ppl = ppl(teacher, eval_windows, teacher_device)
     log = {"q": args.q, "lam": args.lam, "pot": args.pot, "gate": args.gate,
-           "reproject_every": args.reproject_every, "teacher_ppl": round(teacher_ppl, 4),
+           "reproject_every": args.reproject_every, "reproject_init": args.reproject_init,
+           "eval_pre_snap": args.eval_pre_snap, "teacher_ppl": round(teacher_ppl, 4),
            "steps": args.steps, "seq": args.seq, "seed": args.seed,
            "update": args.update, "md_q": args.md_q, "rotate": args.rotate, "events": []}
 
@@ -301,6 +312,12 @@ def run(args) -> dict:
 
     # baseline: projection ratio before any training (pure RTN)
     report(0, "init", projected=True)
+    if args.reproject_init:
+        # Faithful replication of the original in-place-eval accident: the
+        # training masters start ON the ternary grid (the bug snapped at step
+        # 0 too), then get re-snapped by --reproject-every.
+        project_ternary(student)
+        print("[rmd] snapped init masters to the ternary grid", flush=True)
 
     started = time.time()
     student.train()
@@ -332,6 +349,10 @@ def run(args) -> dict:
             if args.reproject_every and step % args.reproject_every == 0:
                 # Explicit alternating-projection schedule: snap the masters
                 # to the ternary grid mid-training and keep training from there.
+                if args.eval_pre_snap:
+                    # Cost of returning to the grid: projection of the drifted
+                    # masters, measured before the snap (deep copy, no mutation).
+                    report(step, "pre-snap", projected=True)
                 project_ternary(student)
                 report(step, "reproject")
             if step % args.log_every == 0:
@@ -362,6 +383,12 @@ def main(argv=None) -> int:
                         help="freeze the top fraction by |w| per tensor (init-based); train the flexible remainder")
     parser.add_argument("--reproject-every", type=int, default=0,
                         help="snap masters to the ternary grid every N steps (alternating projection)")
+    parser.add_argument("--reproject-init", action="store_true",
+                        help="snap the masters to the ternary grid at step 0 (faithful to the "
+                             "in-place-eval accident: training starts from the grid)")
+    parser.add_argument("--eval-pre-snap", action="store_true",
+                        help="at each reproject step, also record the projection cost of the "
+                             "drifted masters before the snap (deep copy, no mutation)")
     parser.add_argument("--update", choices=("adafactor", "md"), default="adafactor",
                         help="md = true RMD mirror-map step (arXiv:2202.10788 Algo 1): "
                              "u = sign(w)|w|^(q-1), dual step, map back; the map IS the "
