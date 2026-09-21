@@ -33,7 +33,18 @@ was the STE+KD recipe, this harness is the FP-forward KD control.
 | Mirror map (RMD) | --update md q=8, lam=0, scale 1.0 | loss nan by step 500 (raw dual step swamps u = |w|^7) | falsified (diverged) |
 | Mirror map (RMD) | scale 2.6e-8, bf16 math | loss nan by step 250 (bf16 rounding drift: mean|w| 0.025 -> 0.12 in 300 sim steps; f32 stable) | falsified (precision) |
 | Mirror map (RMD) | scale 2.6e-8, f32 math | loss nan by step 250 (real KD grads: shell step ~= u makes first moves ~+/-50%, logits -> inf through 30 layers) | falsified (formulation) |
-| Strict accident replication | tern lam=0.1, init snap + reproject every 500, honest pre/post-snap evals | running | pending |
+| Strict accident replication | tern lam=0.1, init snap + reproject every 500, honest pre/post-snap evals | training from a grid-snapped init diverges (loss nan @250); the accident provably did NOT snap at init (its per-checkpoint losses are identical to the clean run's), so this variant is NOT the accident | falsified as accident model |
+| Full honest AP trajectory | tern lam=0.1, reproject every 500, A (pre-snap cost) + B (post-snap quality) | running (first A/B at step 500) | pending |
+
+## The artifact, settled
+
+The bugged eval never perturbed training: its 250-step losses match the clean
+run's exactly (9.19, 9.02, 8.75, 8.59, 8.22, 8.02, 8.27, 8.06, 7.59, 7.44), so
+the in-place "reset" had no effect on the trajectory. The 16,125x / 8,457x
+numbers were a broken measurement of the same weights that honestly project to
+108,042,728x @500 (clean eval). There was never a collapse in the weights; the
+"accidental alternating-projection winner" was an eval-accounting ghost. The
+honest alternating-projection numbers (1,410,076x @500) are the truth.
 
 ## Lesson (the bug that matters)
 
