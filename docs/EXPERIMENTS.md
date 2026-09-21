@@ -39,12 +39,22 @@ was the STE+KD recipe, this harness is the FP-forward KD control.
 | Rotated basis, pure KD | --rotate lam=0 | init **15,805x** (15x better than unrotated 240,579x), **2,872x @500** (best single point of the search), then oscillates 45k-189k, final 69,021x; KD loss 0.91 -> 0.71 (best of any run); kurtosis flat 3.7 | geometry helps at short horizon, weights drift off-projectable over time; candidate for combination |
 | Gate 0.2 + tern attractor | lam=0.1, gate 0.2 (frozen top 20% by |w|) | 127M @500, 4.7G @1000, 5.1M @3000; kurtosis 4.4 -> 3.8 | falsified; freezing top weights does not rescue the tern potential |
 
-## Runtime note: per-card pace
+## Runtime note: what actually sets the pace
 
-3000-step runs: GPU0 (cuda:0, display card) ~24-26 min (~0.47 s/step);
-GPU1 (cuda:1, PCI 07:00.0) ~38-39 min (~0.75 s/step), matching the old
-cross-card pace. GPU0 is ~1.5x faster. ETA for any 3000-step run: ~25 min on
-GPU0, ~38 min on GPU1; first projected eval at step 500 (~4-7 min).
+CORRECTION: the cards run at the same pace. A same-config 200-step tern probe
+takes 138s / 0.69 s/step on BOTH cards, with byte-identical losses and final
+ratio (80848989.3167). The apparent "GPU0 is 1.5x faster" split was workload
+confounding, not hardware:
+
+- the tern potential (`--lam 0.1`, computed on all 196 target linears every
+  step) costs ~+0.2 s/step vs `lam=0` (0.69-0.77 vs 0.49-0.52 s/step);
+- `--update md` skips the Adafactor step entirely;
+- eval deepcopies (`--project-every`/`--eval-pre-snap`) add ~5-6 min per run
+  (6 x ~50s);
+- both cards reproduce the same numbers exactly (healthy GPU1 matches GPU0).
+
+3000-step ETA: ~25-27 min for lam=0 runs, ~38-39 min for tern-potential runs,
+either card.
 
 ## GPU1 driver wedge (2026-09-21 ~05:25+)
 
