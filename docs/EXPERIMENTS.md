@@ -39,6 +39,13 @@ was the STE+KD recipe, this harness is the FP-forward KD control.
 | Rotated basis, pure KD | --rotate lam=0 | init **15,805x** (15x better than unrotated 240,579x), **2,872x @500** (best single point of the search), then oscillates 45k-189k, final 69,021x; KD loss 0.91 -> 0.71 (best of any run); kurtosis flat 3.7 | geometry helps at short horizon, weights drift off-projectable over time; candidate for combination |
 | Gate 0.2 + tern attractor | lam=0.1, gate 0.2 (frozen top 20% by |w|) | 127M @500, 4.7G @1000, 5.1M @3000; kurtosis 4.4 -> 3.8 | falsified; freezing top weights does not rescue the tern potential |
 
+## Runtime note: per-card pace
+
+3000-step runs: GPU0 (cuda:0, display card) ~24-26 min (~0.47 s/step);
+GPU1 (cuda:1, PCI 07:00.0) ~38-39 min (~0.75 s/step), matching the old
+cross-card pace. GPU0 is ~1.5x faster. ETA for any 3000-step run: ~25 min on
+GPU0, ~38 min on GPU1; first projected eval at step 500 (~4-7 min).
+
 ## GPU1 driver wedge (2026-09-21 ~05:25+)
 
 After an OOM crash at init plus repeated SIGKILLs on GPU1 (PCI 07:00.0,
