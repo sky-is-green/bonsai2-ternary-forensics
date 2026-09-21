@@ -10,6 +10,6 @@ echo "=== cand3: RMD mirror-map update (md-q=8, lam=0, lr-scale=$SCALE) ==="
 $PY scripts/pilot/rmd_kd.py --model-dir "$MODEL" --corpus "$CORPUS" \
   --out artifacts/rmd/md-q8-lam0-s$SCALE --update md --md-q 8 --lam 0 \
   --md-lr-scale "$SCALE" --steps 3000 --project-every 500 --log-every 250 \
-  --teacher-device cuda:0 \
+  --teacher-device cuda:1 --device cuda:1 \
   > artifacts/rmd/md-q8-lam0-s$SCALE.log 2>&1
 echo "md exit: $?"

@@ -29,7 +29,7 @@ was the STE+KD recipe, this harness is the FP-forward KD control.
 | Per-group attractor, bugged | lam=0.1, eval mutated masters | 16,125x @500, 8,457x @1000, then diverged (21,891 @1500 ... 1.04e9 final) | artifact (in-place projection = accidental alternating projection) |
 | Per-group attractor, clean | lam=0.1, deep-copy eval | 108,042,728x @500, 4,557,917x @1000, ... 1,278,940x @3000; kurtosis 2 -> 30 | continuous form falsified |
 | Per-group attractor | lam=0.02, deep-copy eval | 9,501,374x @500, 439,430,657x @1000, 3,733,210x @1500, loss 2.3-2.5; terminated early @1750 (operator: switch to GPU1-only) | continuous form falsified at low lam too |
-| Alternating projection | tern lam=0.1, reproject+project every 500 | running (GPU1 only: student+teacher cuda:0) | pending |
+| Alternating projection | tern lam=0.1, reproject+project every 500 | running (GPU1 only: student+teacher cuda:1) | pending |
 
 ## Lesson (the bug that matters)
 
