@@ -1,0 +1,392 @@
+"""RMD attractor test at 1.7B: does a large-q potential make ternary projection cheap?
+
+Tests the mirror-descent hypothesis raised in the community discussion: with an
+overparameterized net there are many weight configurations implementing nearly
+the same function, and a regularizer-mirror-descent style objective with a
+large-q potential (|w|^q, q >> 1) can move the weight distribution toward the
+{-1,0,+1} attractors while KD preserves the function. If that works, the final
+ternary projection is nearly lossless, and the "last 8%" is the visible residue
+of training-induced basin migration rather than error compensation.
+
+Forward pass is FP (no STE). Loss = KL(student|teacher, T) + lam * potential.
+Potential per tensor: mean((|w| / rms_tensor)^q), dimensionless O(1), so lam is
+comparable to the KL scale.
+
+Baseline to beat: T28 STE+KD held-out ratio 1.103x (90.6% retention).
+
+Usage::
+
+    HIP_VISIBLE_DEVICES=0 ~/.unsloth/studio/unsloth_studio/bin/python \\
+        scripts/pilot/rmd_kd.py --model-dir <qwen3-1.7b-hf> --corpus <txt> \\
+        --q 8 --lam 0.2 --steps 3000 --out artifacts/rmd/q8-lam0.2 \\
+        --project-every 500
+
+Variants:
+
+- `--reproject-every N`: alternating projection (snap masters to the ternary
+  grid every N steps and keep training; combine with `--project-every N` to
+  evaluate the snapped state on a deep copy).
+- `--update md`: true RMD mirror-map step (arXiv:2202.10788 Algorithm 1) with
+  `--md-q`; the map is the regularizer, run with `--lam 0`.
+- `--rotate`: train in the spec-rotated basis (PRF signs, seed 1337): q/k/v,
+  gate/up absorb `W R^T`, o_proj/down absorb `R W` with `b' = R b`; the
+  forward keeps the unrotated function exactly.
+- `--gate G`: freeze the top G fraction by |w| per tensor at init.
+"""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import math
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from bonsai_forensics.quant import quantize_rtn_absmean  # noqa: E402
+from bonsai_forensics.recover import TARGET_SUFFIXES  # noqa: E402
+from bonsai_forensics.rotation import absorb_input, absorb_output, hadamard, rotations_for  # noqa: E402
+
+
+def load_windows(tokenizer, corpus: Path, seq: int, eval_windows: int):
+    ids = tokenizer(corpus.read_text(encoding="utf-8"), return_tensors="np")["input_ids"].reshape(-1)
+    n = (len(ids) // seq) * seq
+    ids = ids[:n].reshape(-1, seq)
+    if len(ids) <= eval_windows:
+        raise SystemExit(f"corpus too small: {len(ids)} windows")
+    train = ids[:-eval_windows]
+    eval = ids[-eval_windows:]
+    return train, eval
+
+
+def target_linears(model: torch.nn.Module):
+    found = []
+    for name, module in model.named_modules():
+        if isinstance(module, torch.nn.Linear) and name.endswith(TARGET_SUFFIXES):
+            module.weight.requires_grad_(True)
+            found.append(module)
+        elif isinstance(module, torch.nn.Linear):
+            module.weight.requires_grad_(False)
+    return found
+
+
+def kl_loss(student_logits, teacher_logits, temperature):
+    t = F.log_softmax(teacher_logits / temperature, dim=-1).detach()
+    s = F.log_softmax(student_logits / temperature, dim=-1)
+    return (t.exp() * (t - s)).sum(dim=-1).mean() * temperature**2
+
+
+def potential(linears, q):
+    total = torch.tensor(0.0, device=linears[0].weight.device)
+    for m in linears:
+        w = m.weight
+        rms = w.square().mean().sqrt().clamp_min(1e-8)
+        total = total + (w.abs() / rms).pow(q).mean()
+    return total
+
+
+def potential_tern(linears):
+    """Per-group ternary attractor: pull |w| toward the group's absmean scale
+    s_g (the +/-1 peaks) or toward 0, at each group's own scale. O(1)/weight."""
+    total = torch.tensor(0.0, device=linears[0].weight.device, dtype=torch.float32)
+    for m in linears:
+        w = m.weight
+        flat = w.reshape(-1, 128)
+        s = flat.abs().mean(dim=1, keepdim=True).clamp_min(1e-8)
+        a = (flat.abs() - s).square() / s.square()
+        z = (flat / s).square()
+        pen = torch.where(flat.abs() >= 0.5 * s, a, z)
+        total = total + pen.mean().float()
+    return total
+
+
+def concentration(linears):
+    """Kurtosis and attractor-neighborhood fractions across target weights."""
+    kurt, near_zero, near_peak, n = 0.0, 0.0, 0.0, 0
+    for m in linears:
+        w = m.weight.detach().float()
+        rms = w.square().mean().sqrt().clamp_min(1e-8)
+        w_n = w / rms
+        kurt = kurt + (w_n - w_n.mean()).pow(4).mean() / (w_n.var(unbiased=False) + 1e-12).pow(2)
+        near_zero = near_zero + (w_n.abs() < 0.2).float().mean()
+        near_peak = near_peak + (w_n.abs() > 1.2).float().mean()
+        n += 1
+    return {"kurtosis": float(kurt / n), "near_zero": float(near_zero / n), "near_peak": float(near_peak / n)}
+
+
+@torch.no_grad()
+def project_ternary(model):
+    """In-place absmean RTN g128 projection of every target linear."""
+    for name, module in model.named_modules():
+        if isinstance(module, torch.nn.Linear) and name.endswith(TARGET_SUFFIXES):
+            w = module.weight.detach().cpu().float().numpy()
+            tq = quantize_rtn_absmean(w, 128)
+            module.weight.data = torch.from_numpy(tq.dequantize().astype(np.float32)).to(device=module.weight.device, dtype=module.weight.dtype)
+
+
+@torch.no_grad()
+def ppl(model, windows, device):
+    model.eval()
+    losses = []
+    for w in windows:
+        ids = torch.tensor(w, dtype=torch.long, device=device).unsqueeze(0)
+        logits = model(ids).logits[0, :-1].float()
+        targets = ids[0, 1:]
+        loss = F.cross_entropy(logits, targets, reduction="mean")
+        losses.append(loss.item())
+    return math.exp(float(np.mean(losses)))
+
+
+def magnitude_masks(linears, gate: float):
+    """Per-tensor freeze mask: keep the top `gate` fraction by |w| (measured at
+    initialization) frozen, train only the flexible remainder. None when 0."""
+    if gate <= 0:
+        return None
+    masks = []
+    for m in linears:
+        w = m.weight.detach()
+        thr = torch.quantile(w.abs().flatten(), 1.0 - gate)
+        masks.append((w.abs() < thr).to(w.dtype))
+    return masks
+
+
+class RotatedLinear(torch.nn.Linear):
+    """nn.Linear carrying the spec-absorbed weight with the orthogonal
+    rotation inserted into the forward so the unabsorbed function is preserved
+    exactly. Input side (q/k/v, gate/up): feeds R x into W R^T. Output side
+    (o_proj, down): stores R W with bias' = R b and applies R^T after, so
+    y = R^T (R W z + R b) = W z + b. The stored weights are the ones the 27B
+    quantizes."""
+
+    def __init__(self, base: torch.nn.Linear, rot_in: torch.Tensor | None, rot_out: torch.Tensor | None) -> None:
+        super().__init__(base.in_features, base.out_features, bias=base.bias is not None)
+        self.weight.data.copy_(base.weight.data)
+        if base.bias is not None:
+            self.bias.data.copy_(base.bias.data)
+        self.rot_in = rot_in
+        self.rot_out = rot_out
+
+    def forward(self, x):
+        if self.rot_in is not None:
+            x = F.linear(x, self.rot_in)
+        y = F.linear(x, self.weight, self.bias)
+        if self.rot_out is not None:
+            y = F.linear(y, self.rot_out)
+        return y
+
+
+def _rot_tensor(width: int, seed: int, dtype=torch.float32) -> torch.Tensor:
+    """Dense block-diagonal R for one width (spec 1.1/1.2, PRF signs)."""
+    rots = rotations_for(width, seed, "hidden")
+    g = len(rots[0])
+    out = np.zeros((width, width), dtype=np.float64)
+    for k, signs in enumerate(rots):
+        blk = hadamard(g) * signs[None, :]
+        out[k * g : (k + 1) * g, k * g : (k + 1) * g] = blk
+    return torch.from_numpy(out.astype(np.float32)).to(dtype)
+
+
+def wrap_rotated(model: torch.nn.Module, seed: int) -> list[torch.nn.Module]:
+    """Absorb the spec rotation into every target linear (spec table 1.3:
+    q/k/v, gate/up consume a rotated input (W R^T); o_proj/down emit a rotated
+    output (R W, bias' = R b)) and keep the function exact via RotatedLinear
+    wrappers. Returns the wrapped target modules with requires_grad set."""
+    wrapped = []
+    for name, module in list(model.named_modules()):
+        if not (isinstance(module, torch.nn.Linear) and name.endswith(TARGET_SUFFIXES)):
+            continue
+        parent_name, _, child = name.rpartition(".")
+        parent = model.get_submodule(parent_name) if parent_name else model
+        if name.endswith(("o_proj", "down_proj")):
+            rots = rotations_for(module.out_features, seed, "hidden")
+            w_abs = absorb_output(module.weight.detach().cpu().float().numpy(), rots)
+            repl = RotatedLinear(module, None, _rot_tensor(module.out_features, seed, module.weight.dtype).transpose(-1, -2))
+            if module.bias is not None:
+                r = _rot_tensor(module.out_features, seed, torch.float32)
+                repl.bias.data = (r @ module.bias.detach().cpu().float()).to(module.bias.dtype)
+        else:
+            rots = rotations_for(module.in_features, seed, "hidden")
+            w_abs = absorb_input(module.weight.detach().cpu().float().numpy(), rots)
+            repl = RotatedLinear(module, _rot_tensor(module.in_features, seed, module.weight.dtype), None)
+        repl.weight.data = torch.from_numpy(w_abs.astype(np.float32)).to(
+            device=module.weight.device, dtype=module.weight.dtype)
+        repl.weight.requires_grad_(True)
+        setattr(parent, child, repl)
+        wrapped.append(repl)
+    return wrapped
+
+
+@torch.no_grad()
+def mirror_step(linears, q: float, lr: float, scale: float = 1.0) -> None:
+    """Regularizer mirror descent (Algorithm 1, arXiv:2202.10788).
+
+    Mirror map psi(w) = (1/q)|w|^q: dual u = sign(w)|w|^(q-1), step in dual
+    space u -= eta*g, map back w = sign(u)|u|^(1/(q-1)). The map itself is the
+    regularizer, so the |w|^q potential must not be added to the loss too.
+    """
+    eta = lr * scale
+    for m in linears:
+        g = m.weight.grad
+        if g is None:
+            continue
+        w = m.weight
+        u = torch.sign(w) * w.abs().pow(q - 1)
+        u = u - eta * g
+        m.weight.copy_(torch.sign(u) * u.abs().clamp_min(1e-30).pow(1.0 / (q - 1)))
+
+
+def run(args) -> dict:
+    from transformers import Adafactor, AutoModelForCausalLM, AutoTokenizer
+
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    device = torch.device(args.device)
+    teacher_device = torch.device(args.teacher_device)
+
+    tokenizer = AutoTokenizer.from_pretrained(args.model_dir)
+    train_windows, eval_windows = load_windows(tokenizer, Path(args.corpus), args.seq, args.eval_windows)
+    print(f"[rmd] train windows {train_windows.shape}, eval {eval_windows.shape}, q={args.q} lam={args.lam}", flush=True)
+
+    teacher = AutoModelForCausalLM.from_pretrained(args.model_dir, dtype=torch.bfloat16).to(teacher_device)
+    teacher.eval()
+    for p in teacher.parameters():
+        p.requires_grad_(False)
+
+    student = AutoModelForCausalLM.from_pretrained(args.model_dir, dtype=torch.bfloat16).to(device)
+    student.gradient_checkpointing_enable()
+    linears = target_linears(student)
+    if args.rotate:
+        linears = wrap_rotated(student, args.seed)
+        print(f"[rmd] rotated {len(linears)} target linears into the spec basis", flush=True)
+    masks = magnitude_masks(linears, args.gate)
+    for p in student.parameters():
+        p.requires_grad_(False)
+    for m in linears:
+        m.weight.requires_grad_(True)
+
+    opt = Adafactor([p for m in linears for p in (m.weight,)],
+                    lr=args.lr, scale_parameter=False, relative_step=False)
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+
+    teacher_ppl = ppl(teacher, eval_windows, teacher_device)
+    log = {"q": args.q, "lam": args.lam, "pot": args.pot, "gate": args.gate,
+           "reproject_every": args.reproject_every, "teacher_ppl": round(teacher_ppl, 4),
+           "steps": args.steps, "seq": args.seq, "seed": args.seed,
+           "update": args.update, "md_q": args.md_q, "rotate": args.rotate, "events": []}
+
+    def report(step, label, projected=False):
+        ev = {"step": step, "label": label}
+        if projected:
+            # Evaluate on a deep copy: projection must never mutate the
+            # training masters (an in-place projection reset the weights at
+            # every checkpoint and corrupted the first ternary-attractor run).
+            s = copy.deepcopy(student)
+            project_ternary(s)
+            s_ppl = ppl(s, eval_windows, device)
+            ev["projected_ppl"] = round(s_ppl, 3)
+            ev["projected_ratio"] = round(s_ppl / teacher_ppl, 4)
+            del s
+            print(f"[rmd] {label} step {step}: projected_ratio {ev['projected_ratio']}", flush=True)
+        ev.update(concentration(linears))
+        log["events"].append(ev)
+
+    # baseline: projection ratio before any training (pure RTN)
+    report(0, "init", projected=True)
+
+    started = time.time()
+    student.train()
+    step = 0
+    while step < args.steps:
+        idx = np.random.permutation(len(train_windows))
+        for i in idx[: max(1, args.batch)]:
+            ids = torch.tensor(train_windows[i], dtype=torch.long, device=device).unsqueeze(0)
+            with torch.no_grad():
+                t_logits = teacher(ids.to(teacher_device)).logits[..., :-1, :].to(device)
+            s_logits = student(ids).logits[..., :-1, :]
+            loss = kl_loss(s_logits, t_logits, args.temp)
+            if args.lam > 0:
+                if args.pot == "tern":
+                    loss = loss + args.lam * potential_tern(linears)
+                else:
+                    loss = loss + args.lam * potential(linears, args.q)
+            opt.zero_grad()
+            loss.backward()
+            if masks is not None:
+                for m, mask in zip(linears, masks):
+                    if m.weight.grad is not None:
+                        m.weight.grad.mul_(mask)
+            if args.update == "md":
+                mirror_step(linears, args.md_q, args.lr, args.md_lr_scale)
+            else:
+                opt.step()
+            step += 1
+            if args.reproject_every and step % args.reproject_every == 0:
+                # Explicit alternating-projection schedule: snap the masters
+                # to the ternary grid mid-training and keep training from there.
+                project_ternary(student)
+                report(step, "reproject")
+            if step % args.log_every == 0:
+                sec = time.time() - started
+                print(f"[rmd] step {step}/{args.steps} loss {loss.item():.2f} {sec:.0f}s", flush=True)
+            if args.project_every and step % args.project_every == 0:
+                report(step, "train", projected=True)
+            if step >= args.steps:
+                break
+
+    report(args.steps, "final", projected=True)
+    log["seconds"] = round(time.time() - started, 1)
+    (out / "rmd-report.json").write_text(json.dumps(log, indent=2), encoding="utf-8")
+    print(f"[rmd] wrote {out / 'rmd-report.json'}", flush=True)
+    return log
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--model-dir", required=True)
+    parser.add_argument("--corpus", required=True)
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--q", type=int, default=8)
+    parser.add_argument("--lam", type=float, default=0.2)
+    parser.add_argument("--pot", choices=("pow", "tern"), default="pow",
+                        help="pow = (|w|/rms)^q penalty; tern = per-group attractor at absmean scale")
+    parser.add_argument("--gate", type=float, default=0.0,
+                        help="freeze the top fraction by |w| per tensor (init-based); train the flexible remainder")
+    parser.add_argument("--reproject-every", type=int, default=0,
+                        help="snap masters to the ternary grid every N steps (alternating projection)")
+    parser.add_argument("--update", choices=("adafactor", "md"), default="adafactor",
+                        help="md = true RMD mirror-map step (arXiv:2202.10788 Algo 1): "
+                             "u = sign(w)|w|^(q-1), dual step, map back; the map IS the "
+                             "regularizer, run with --lam 0")
+    parser.add_argument("--md-q", type=float, default=8.0,
+                        help="q exponent of the mirror potential (1/q)|w|^q")
+    parser.add_argument("--md-lr-scale", type=float, default=1.0,
+                        help="extra scale on the mirror dual-space step size")
+    parser.add_argument("--rotate", action="store_true",
+                        help="train in the spec-rotated basis (W' = W R^T per target linear)")
+    parser.add_argument("--steps", type=int, default=3000)
+    parser.add_argument("--seq", type=int, default=512)
+    parser.add_argument("--batch", type=int, default=2)
+    parser.add_argument("--lr", type=float, default=5e-5)
+    parser.add_argument("--temp", type=float, default=2.0)
+    parser.add_argument("--eval-windows", type=int, default=4)
+    parser.add_argument("--log-every", type=int, default=250)
+    parser.add_argument("--project-every", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=1337)
+    parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--teacher-device", default="cuda:1")
+    args = parser.parse_args(argv)
+    run(args)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
