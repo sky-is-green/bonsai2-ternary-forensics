@@ -32,9 +32,23 @@ was the STE+KD recipe, this harness is the FP-forward KD control.
 | Alternating projection | tern lam=0.1, reproject+project every 500 | 1,410,076x @500 (no step-0 snap; trajectory then killed for pivot) | falsified as rescue of the potential form |
 | Mirror map (RMD) | --update md q=8, lam=0, scale 1.0 | loss nan by step 500 (raw dual step swamps u = |w|^7) | falsified (diverged) |
 | Mirror map (RMD) | scale 2.6e-8, bf16 math | loss nan by step 250 (bf16 rounding drift: mean|w| 0.025 -> 0.12 in 300 sim steps; f32 stable) | falsified (precision) |
-| Mirror map (RMD) | scale 2.6e-8, f32 math | loss nan by step 250 (real KD grads: shell step ~= u makes first moves ~+/-50%, logits -> inf through 30 layers) | falsified (formulation) |
-| Strict accident replication | tern lam=0.1, init snap + reproject every 500, honest pre/post-snap evals | training from a grid-snapped init diverges (loss nan @250); the accident provably did NOT snap at init (its per-checkpoint losses are identical to the clean run's), so this variant is NOT the accident | falsified as accident model |
-| Full honest AP trajectory | tern lam=0.1, reproject every 500, A (pre-snap cost) + B (post-snap quality) | running (first A/B at step 500) | pending |
+| Mirror map (RMD) | scale 2.6e-8, f32 math | loss nan by step 250 (real KD grads: shell step ~= u makes first moves ~+/-50%, logits -> inf through 30 layers) | INVALID: GPU1 driver wedge (see below) |
+| Strict accident replication | tern lam=0.1, init snap + reproject every 500, honest pre/post-snap evals | training from a grid-snapped init diverges (loss nan @250); the accident provably did NOT snap at init (its per-checkpoint losses are identical to the clean run's), so this variant is NOT the accident | INVALID: GPU1 driver wedge |
+| Full honest AP trajectory | tern lam=0.1, reproject every 500, A (pre-snap cost) + B (post-snap quality) | loss nan @250 | INVALID: GPU1 driver wedge; UNMEASURED, must be re-run |
+
+## GPU1 driver wedge (2026-09-21 ~05:25+)
+
+After an OOM crash at init plus repeated SIGKILLs on GPU1 (PCI 07:00.0,
+cuda:1), training-backward on that card produces deterministic NaN at step
+~100 (loss 9.38, 9.27, 9.31, then nan; final projected ratio 1.64e61,
+byte-identical across runs). Controls: same config on cuda:0 trains clean;
+teacher forward on cuda:1 is clean; simple ops (matmul/softmax/pow) on cuda:1
+are clean. Verdict: wedged driver state on GPU1, not code or config.
+
+Consequence: every rmd run from ~05:25 to the reboot is invalid (mirror-map
+f32 retest and the full honest AP trajectory must be re-run on a healthy
+GPU). Results before 05:16 (control, pow/tern potentials, clean tern runs,
+tern-lam0.02, honest AP B(500) = 1,410,076x) stand.
 
 ## The artifact, settled
 
