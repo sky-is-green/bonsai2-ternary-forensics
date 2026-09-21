@@ -39,12 +39,12 @@ was the STE+KD recipe, this harness is the FP-forward KD control.
 | Rotated basis, pure KD | --rotate lam=0 | init **15,805x** (15x better than unrotated 240,579x), **2,872x @500** (best single point of the search), then oscillates 45k-189k, final 69,021x; KD loss 0.91 -> 0.71 (best of any run); kurtosis flat 3.7 | geometry helps at short horizon, weights drift off-projectable over time; candidate for combination |
 | Gate 0.2 + tern attractor | lam=0.1, gate 0.2 (frozen top 20% by |w|) | 127M @500, 4.7G @1000, 5.1M @3000; kurtosis 4.4 -> 3.8 | falsified; freezing top weights does not rescue the tern potential |
 | md tuning battery (healthy GPU, 3 phases x 2 cards) | | | |
-| rotate + md q8, shell 0.029 | | 52.43x final | rotation + shell; no synergy at q8/base shell |
+| rotate + md q8, shell 0.020 | | 52.43x final | rotation + shell; no synergy at q8/base shell |
 | md q16, shell 0.020 | | 1,479x final | stiffer shell alone is bad |
 | rotate + md q16, shell 0.020 | | **28.28x final (best yet)** | rotation rescues q16; best config |
-| md q8, shell 0.047 | | 39.85x final | larger shell beats base (54.4x) |
-| md q8, shell 0.016 | | 206.28x final | smaller shell worse |
-| rotate + md q8, shell 0.047 | | 54.84x final | rotation does not help at shell 0.047 |
+| md q8, shell 0.034 | | 39.85x final | larger shell beats base (54.4x) |
+| md q8, shell 0.015 | | 206.28x final | smaller shell worse |
+| rotate + md q8, shell 0.034 | | 54.84x final | rotation does not help at shell 0.034 |
 
 ## Runtime note: what actually sets the pace
 

@@ -405,6 +405,9 @@ def main(argv=None) -> int:
                         help="q exponent of the mirror potential (1/q)|w|^q")
     parser.add_argument("--md-lr-scale", type=float, default=1.0,
                         help="extra scale on the mirror dual-space step size")
+    parser.add_argument("--md-shell", type=float, default=0.0,
+                        help="target equilibrium shell |w*| = (lr*scale)^(1/(q-1)); "
+                             "when > 0 overrides --md-lr-scale with scale = shell^(q-1)/lr")
     parser.add_argument("--rotate", action="store_true",
                         help="train in the spec-rotated basis (W' = W R^T per target linear)")
     parser.add_argument("--steps", type=int, default=3000)
@@ -419,6 +422,8 @@ def main(argv=None) -> int:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--teacher-device", default="cuda:1")
     args = parser.parse_args(argv)
+    if args.md_shell > 0:
+        args.md_lr_scale = args.md_shell ** (args.md_q - 1) / args.lr
     run(args)
     return 0
 
