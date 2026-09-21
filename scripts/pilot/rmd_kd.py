@@ -145,16 +145,26 @@ def ppl(model, windows, device):
 
 
 def magnitude_masks(linears, gate: float):
-    """Per-tensor freeze mask: keep the top `gate` fraction by |w| (measured at
-    initialization) frozen, train only the flexible remainder. None when 0."""
+    """Per-tensor freeze thresholds: keep the top `gate` fraction by |w|
+    (measured at initialization) frozen, train only the flexible remainder.
+    Returns per-tensor scalar thresholds (no full-size mask tensors held:
+    at 1.7B they cost ~3.6 GiB and OOM the one-card setup). None when 0."""
     if gate <= 0:
         return None
-    masks = []
+    thrs = []
     for m in linears:
         w = m.weight.detach()
-        thr = torch.quantile(w.abs().flatten(), 1.0 - gate)
-        masks.append((w.abs() < thr).to(w.dtype))
-    return masks
+        thrs.append(torch.quantile(w.abs().flatten().float(), 1.0 - gate))
+    return thrs
+
+
+@torch.no_grad()
+def apply_gate_grads(linears, thresholds) -> None:
+    """Zero the gradient of the frozen (top-|w|) weights, transiently."""
+    for m, thr in zip(linears, thresholds):
+        if m.weight.grad is not None:
+            mask = (m.weight.detach().abs() < thr).to(m.weight.dtype)
+            m.weight.grad.mul_(mask)
 
 
 class RotatedLinear(torch.nn.Linear):
@@ -167,9 +177,8 @@ class RotatedLinear(torch.nn.Linear):
 
     def __init__(self, base: torch.nn.Linear, rot_in: torch.Tensor | None, rot_out: torch.Tensor | None) -> None:
         super().__init__(base.in_features, base.out_features, bias=base.bias is not None)
-        self.weight.data.copy_(base.weight.data)
-        if base.bias is not None:
-            self.bias.data.copy_(base.bias.data)
+        self.weight = torch.nn.Parameter(base.weight.detach().clone())
+        self.bias = base.bias
         self.rot_in = rot_in
         self.rot_out = rot_out
 
@@ -182,7 +191,7 @@ class RotatedLinear(torch.nn.Linear):
         return y
 
 
-def _rot_tensor(width: int, seed: int, dtype=torch.float32) -> torch.Tensor:
+def _rot_tensor(width: int, seed: int, dtype=torch.float32, device="cuda:0") -> torch.Tensor:
     """Dense block-diagonal R for one width (spec 1.1/1.2, PRF signs)."""
     rots = rotations_for(width, seed, "hidden")
     g = len(rots[0])
@@ -190,7 +199,7 @@ def _rot_tensor(width: int, seed: int, dtype=torch.float32) -> torch.Tensor:
     for k, signs in enumerate(rots):
         blk = hadamard(g) * signs[None, :]
         out[k * g : (k + 1) * g, k * g : (k + 1) * g] = blk
-    return torch.from_numpy(out.astype(np.float32)).to(dtype)
+    return torch.from_numpy(out.astype(np.float32)).to(device=device, dtype=dtype)
 
 
 def wrap_rotated(model: torch.nn.Module, seed: int) -> list[torch.nn.Module]:
@@ -207,14 +216,14 @@ def wrap_rotated(model: torch.nn.Module, seed: int) -> list[torch.nn.Module]:
         if name.endswith(("o_proj", "down_proj")):
             rots = rotations_for(module.out_features, seed, "hidden")
             w_abs = absorb_output(module.weight.detach().cpu().float().numpy(), rots)
-            repl = RotatedLinear(module, None, _rot_tensor(module.out_features, seed, module.weight.dtype).transpose(-1, -2))
+            repl = RotatedLinear(module, None, _rot_tensor(module.out_features, seed, module.weight.dtype, module.weight.device).transpose(-1, -2))
             if module.bias is not None:
-                r = _rot_tensor(module.out_features, seed, torch.float32)
+                r = _rot_tensor(module.out_features, seed, torch.float32, module.weight.device)
                 repl.bias.data = (r @ module.bias.detach().cpu().float()).to(module.bias.dtype)
         else:
             rots = rotations_for(module.in_features, seed, "hidden")
             w_abs = absorb_input(module.weight.detach().cpu().float().numpy(), rots)
-            repl = RotatedLinear(module, _rot_tensor(module.in_features, seed, module.weight.dtype), None)
+            repl = RotatedLinear(module, _rot_tensor(module.in_features, seed, module.weight.dtype, module.weight.device), None)
         repl.weight.data = torch.from_numpy(w_abs.astype(np.float32)).to(
             device=module.weight.device, dtype=module.weight.dtype)
         repl.weight.requires_grad_(True)
@@ -312,6 +321,7 @@ def run(args) -> dict:
 
     # baseline: projection ratio before any training (pure RTN)
     report(0, "init", projected=True)
+    torch.cuda.empty_cache()
     if args.reproject_init:
         # Faithful replication of the original in-place-eval accident: the
         # training masters start ON the ternary grid (the bug snapped at step
@@ -338,9 +348,7 @@ def run(args) -> dict:
             opt.zero_grad()
             loss.backward()
             if masks is not None:
-                for m, mask in zip(linears, masks):
-                    if m.weight.grad is not None:
-                        m.weight.grad.mul_(mask)
+                apply_gate_grads(linears, masks)
             if args.update == "md":
                 mirror_step(linears, args.md_q, args.lr, args.md_lr_scale)
             else:
