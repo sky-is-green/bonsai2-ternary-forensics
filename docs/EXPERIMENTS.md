@@ -254,6 +254,45 @@ Success criterion: best-so-far below 1.1603x, and no final divergence. If the
 decayed run still stalls near 1.10-1.16x, the recipe — not the schedule — is the
 remaining lever.
 
+#### Result: managed decay works (2026-09-22)
+
+The decayed run and the constant-LR baseline are **byte-identical through step
+12000** (same seed, same recipe, decay disabled until warmup), so this is a
+controlled A/B on one trajectory:
+
+| step | baseline | decay | decay retention |
+|---|---|---|---|
+| 10000 | 1.2152 | 1.2152 | 82.3% |
+| 12000 | 1.2641 | 1.2641 | 79.1% |
+| *decay fires* | — | lr 5e-5 -> 2.5e-5 (event 1) | — |
+| 13000 | 1.2454 | **1.1462** | 87.2% |
+| 14000 | 1.2541 | **1.1510** | 86.9% |
+| 15000 | 1.1953 | **1.1504** | 86.9% |
+| 16000 | 1.1603 | **1.1373** | **87.9%** |
+| 17000 | 1.2154 | **1.1829** | 84.5% |
+
+- Trigger fired at **step 12000** — exactly `patience 2000` after the best at
+  10000 — catching the stall the baseline then suffered.
+- **Best 1.1373 @ 16000 (87.9%)** vs baseline best 1.1603 (86.2%); better at
+  every step from 13000 onward. Best region at 12500: min **1.015** (~98.5%).
+- **Verdict: managed decay is a working lever.** Not quotable until replicated;
+  a seed-2 replication (`ste-rotate-20k-decay-s2`) was launched 2026-09-22 ~23:20.
+
+#### Reproject falsified (2026-09-22)
+
+`--reproject-every 500` (snap the masters to the ternary grid every 500 steps):
+
+```
+500: 5.642   1000: 15.67   1500: 67.5   2000: 80.8   5000: 19,059
+10000: 165.5   13000: 46.08   13500: 107.8   ...
+```
+
+It destroys the model immediately and never recovers (0.6-2% retention). Likely
+mechanism: `--ste` already ternarizes the *forward*, so the masters must stay
+continuous; snapping them removes the information STE depends on.
+**Do not spend GPU on reproject cadences** — the earlier "250 or 1000?" question
+is answered: none of them. Run killed 2026-09-22.
+
 ## Runtime note: what actually sets the pace
 
 CORRECTION: the cards run at the same pace. A same-config 200-step tern probe
@@ -320,13 +359,13 @@ multi-region baseline is **2.09x mean** (~48%). The best *complete* run is
 5. DONE (negative): 20000 steps at a constant LR peaked at **1.1603x / 86.2% at
    step 16000** then diverged to **1.2930x / 77.3%** at step 20000. Length is not
    the lever; the best complete run remains 10000 steps (1.2152x / 82.3%).
-6. IN FLIGHT: managed decay + `--save-best` — 20000 steps, same seed/recipe,
-   with warmup-guarded plateau/drift LR reduction (`--lr-decay-warmup 10000
-   --lr-decay-patience 2000 --lr-decay-drift-eps 0.10 --lr-decay-factor 0.5
-   --lr-decay-cooldown 1000 --lr-decay-max 3 --lr-floor 5e-6`). Success: best
-   below 1.1603x with no final divergence.
-7. Then: `--gate 0.2`, low-lam tern potential, and a neutral larger corpus.
-8. Replicate the best config across seeds before any 27B work.
+6. DONE (positive): managed decay works — **best 1.1373x / 87.9% @ step 16000**
+   against a byte-identical baseline (best 1.1603x / 86.2%). Event fired at step
+   12000 on the plateau trigger. See the section above.
+7. NEXT: replicate managed decay across seeds (`-s2` launched 2026-09-22), then
+   try decay + LSQ at 20000, and decay on a neutral larger corpus.
+8. DONE (negative): reproject cadences are falsified; do not re-run them.
+9. Replicate the best config across seeds before any 27B work.
 
 ## Papers
 
