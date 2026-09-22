@@ -2,10 +2,12 @@
 
 Status of the recipe search for the last 8% (mission bar: projected ratio
 <= 1.031x at 1.7B, i.e. >= 97% retention). All numbers are from
-`scripts/pilot/rmd_kd.py` on the Qwen3-1.7B canary (student cuda:0, teacher
-cuda:1, KD T=2, 585 train windows x 512, 4 eval windows x 512, teacher PPL
-32.93). Ratio = projected PPL / teacher PPL at absmean RTN g128. Baseline to
-beat: T28 STE+KD 1.103x.
+`scripts/pilot/rmd_kd.py` on the Qwen3-1.7B canary (student and teacher on one
+card, KD T=2, 585 train windows x 512, 4 eval windows x 512, teacher PPL 32.93).
+Ratio = model PPL / teacher PPL. The original baseline "T28 STE+KD 1.103x" is
+**retracted** (see "T28's 1.103x is not a clean holdout" below and F11): it was
+measured on training windows, and the clean-holdout value for that recipe is
+**~2.0x**.
 
 ## Hypothesis
 
@@ -19,8 +21,9 @@ preserves the function, making the final ternary projection nearly lossless.
 ## Honest ledger (committed to `artifacts/rmd/`)
 
 Control: KD only, 3000 steps. Init 240,579x -> final 27,978x. Kurtosis flat
-~2.0. Projection error of the trained masters is the baseline; T28's 1.103x
-was the STE+KD recipe, this harness is the FP-forward KD control.
+~2.0. This whole table scores the *projection cost* of FP-trained masters, a
+different ruler from a deployed ternary model's PPL ratio (see the STE section
+below). The 1.103x once cited as the T28 baseline is retracted.
 
 | run | config | result | verdict |
 |---|---|---|---|
@@ -45,6 +48,75 @@ was the STE+KD recipe, this harness is the FP-forward KD control.
 | md q8, shell 0.034 | | 39.85x final | larger shell beats base (54.4x) |
 | md q8, shell 0.015 | | 206.28x final | smaller shell worse |
 | rotate + md q8, shell 0.034 | | 54.84x final | rotation does not help at shell 0.034 |
+
+## Deployment metric: the STE arm (2026-09-22)
+
+Every row above scores `projected_ratio` of FP-trained masters: the cost of
+snapping an unconstrained solution to the grid. That is not the number T28
+reported. T28 trained with the ternary forward in the loop (`ternary_ste`), so
+its 1.103x is the deployed ternary model's own PPL ratio. Those are the same
+quantity (ternary PPL / teacher PPL) but produced by different procedures, so
+the FP-projection leaderboard was the wrong ruler for the mission bar.
+
+`scripts/pilot/rmd_kd.py --ste` closes that gap: it wraps the target linears in
+`TernaryLinear` (forward = absmean STE) and reports the model's own PPL ratio,
+directly comparable to T28. Single card GPU1, student+teacher both `cuda:1`,
+3000 steps, 4 eval windows x 512, peak 10.18 GiB allocated / 11.38 GiB reserved
+(so the run fits one 20 GiB card; it does not need the two-card split).
+
+| run | init | 500 | 1000 | 1500 | 2000 | 2500 | 3000 | verdict |
+|---|---|---|---|---|---|---|---|---|
+| STE control (KD + Adafactor, T28 recipe) | 655,974x | 16.23x | 14.62x | 5.69x | 4.94x | 3.93x | **2.93x** | still descending |
+| STE + mirror map (q16, shell 0.020) | 655,974x | 94.53x | 46.45x | 44.34x | 65.05x | 55.66x | 23.01x | **falsified** (worse than control at every checkpoint) |
+
+Reading:
+
+- The STE control reproduces the T28 regime: a monotone descent toward the
+  teacher. The 7000-step run plateaus at 2.01x, so the descent stalls well above
+  the mission bar on this corpus. The 1.103x it was once compared to was never a
+  valid target (see the holdout section below).
+- The mirror-map update does **not** help inside the ternary loop at this
+  config; it fights KD and oscillates. This is the apples-to-apples test the
+  FP-projection ledger could not provide.
+- The FP runs bottoming at ~28x are far above the STE control's 2.93x, which
+  confirms those numbers were a different metric, not progress toward 1.031x.
+
+## T28's 1.103x is not a clean holdout (2026-09-22)
+
+The 7000-step STE runs (anchor and `--gate 0.2`) plateaued near 2.0x, not
+1.103x. The gap is a measurement artifact in the T28 harness, not a training
+regression.
+
+- `bonsai_forensics/recover.py::build_batches` samples windows from
+  `ids[:usable]` with **no holdout** (recover.py:138-142), so every window is in
+  the training pool.
+- `evaluate_perplexity` evaluates at `start = samples * seq_len` = 32 * 512 =
+  16384, i.e. tokens `[16384, 18432)` (recover.py:166-175), which lies inside
+  that pool. Over 5000 steps at batch 2 each eval window was sampled ~17 times.
+- T28's `heldout_ppl_student` 42.988 / teacher 38.966 = 1.103x (private record,
+  `hivebench/artifacts/ternary/recover/run1/recover-report-s5000.json`, config
+  `seq_len 512, samples 32, batch 2, steps 5000`) is therefore a train-set
+  evaluation.
+
+`rmd_kd.py` holds the last 4 windows out entirely (`train = ids[:-4]`,
+`eval = ids[-4:]`), so its numbers are clean. Clean 7000-step anchor: **2.0097x**.
+
+| run (7000 steps, clean holdout) | 500 | 1000 | 2000 | 3000 | 5000 | 6000 | 7000 |
+|---|---|---|---|---|---|---|---|
+| STE control (T28 recipe) | 16.23x | 14.62x | 4.94x | 2.93x | 2.22x | 2.14x | **2.01x** |
+| STE + `--gate 0.2` | 29.17x | 35.29x | 10.58x | 5.27x | 2.70x | 2.91x | **2.42x** |
+
+A region diagnostic (`/tmp/opencode/diag_regions.py`) confirms the harness is not
+miscalculating: on both T28's region (tokens 16384:18432, FP PPL 66.0) and the
+rmd region (last 2048, FP PPL 35.6), absmean-STE quantization of the base model
+is catastrophic at init (145,702x and 135,953x respectively), matching the
+harness's ~656,000x init to within the expected numeric spread at those
+magnitudes.
+
+Consequence: the mission bar `<= 1.031x` was set against 1.103x, which is
+optimistic. The honest 1.7B retention for the T28 recipe is ~2.0x on unseen
+tokens. This needs to be re-baselined before any variant is judged, and the
+whitepaper's 1.103x figure (docs/WHITEPAPER.md sections 5-6) is affected.
 
 ## Runtime note: what actually sets the pace
 
@@ -98,19 +170,23 @@ projection is now an explicit, legitimate variant.
 
 ## Current candidates, in order
 
-1. `--reproject-every 500` (explicit alternating projection; the accidental
-   winner). No potential needed (or with small lam).
-2. `--gate 0.2` + tern attractor (magnitude-gated: freeze the top 20% by |w|
-   per tensor at init, train the flexible 80%). Encodes the Gate-1 20/80
-   significance structure.
-3. `--update md` (true RMD mirror-map update, Algorithm 1 of arXiv:2202.10788):
-   mirror map `u = sign(w)|w|^(q-1)`, step in dual space, map back
-   `w = sign(u)|u|^(1/(q-1))`. The map is the regularizer; run with `--lam 0`.
-4. `--rotate` (train in the spec-rotated basis, PRF signs seed 1337: q/k/v,
-   gate/up absorb `W R^T`; o_proj/down absorb `R W`, bias' = R b). Matches the
-   27B geometry; the 1.7B is unrotated. The forward preserves the unrotated
-   function exactly (float32-exact on all four edge shapes).
-5. If anything hits <= 1.031x: replicate across 2-3 seeds before any 27B work.
+All candidates are judged in the STE/deployed metric (`--ste`). The honest
+anchor is the clean-holdout **~2.0x** plateau; the retracted 1.103x is not a
+valid target.
+
+1. DONE: plain STE+KD at 7000 steps reached **2.01x** (clean holdout). This is
+   the standing anchor.
+2. `--reproject-every 500` explicit alternating projection, now inside the STE
+   loop (AP was only ever tested on FP masters).
+3. `--gate 0.2` + tern attractor inside STE (freeze the top 20% by |w|, train
+   the flexible 80%; encodes the Gate-1 20/80 structure).
+4. `--rotate` inside STE (train in the spec-rotated basis, PRF signs seed 1337:
+   q/k/v, gate/up absorb `W R^T`; o_proj/down absorb `R W`, bias' = R b).
+5. `--update md` (RMD mirror map, Algorithm 1 of arXiv:2202.10788) is
+   **FALSIFIED in-loop** at q16/shell 0.020: 23.01x vs the control's 2.93x at
+   3000 steps. Revisit only with a changed shell/q and a mechanism argument.
+6. If anything beats the 2.0x anchor materially: replicate across 2-3 seeds
+   before any 27B work.
 
 ## Papers
 

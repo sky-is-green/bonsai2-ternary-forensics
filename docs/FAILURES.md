@@ -8,7 +8,7 @@
 **Policy:** append-only. New entries get a new id and a timestamp; existing
 entries are never rewritten — corrections are appended as `[rev <date>]` notes.
 
-**Two series.** `F1`–`F10` are the load-bearing falsifications referenced by the
+**Two series.** `F1`–`F11` are the load-bearing falsifications referenced by the
 white paper ([`docs/WHITEPAPER.md`](WHITEPAPER.md)). `U1`–`U3` are **unrelated**
 items — operational incidents and a latent bug that do not bear on the findings
 — recorded here for completeness and re-assessability only.
@@ -38,6 +38,7 @@ items — operational incidents and a latent bug that do not bear on the finding
 | [F8](#f8--entropyexcess-loss-data-selection-lost-to-random) | (a)/(b) | Entropy/excess-loss selection lost to random: 172.3 vs 115.9 PPL | Falsified (pilot) | closed | Yes — larger pool/seeds |
 | [F9](#f9--27b-full-model-cpu-offload-swap-thrashes) | (b)/(c) | 27B full-model offload swap-thrashes (55.6 GB vs 40 GB VRAM + ~20 GB RAM) | Mitigated | resolved | No |
 | [F10](#f10---ngl-99-allocation-failure-on-one-20-gb-card) | (c) | `-ngl 99` on one 20 GB card fails to allocate; fixed by auto-fit | Resolved | resolved | No |
+| [F11](#f11--t28-holdout-leak-evaluation-on-training-windows) | (a) | T28's 1.103× was measured on its own training windows; clean holdout is ~2.0× | Retracted | open | Yes — re-baseline |
 | [U1](#u1--internal-tooling-drift-blocked-harness-imports) | (c)/(d) | Internal tooling drift blocked harness imports; pinned dependency workaround is interim | Mitigated | resolved (fix pending) | Yes — T23 |
 | [U2](#u2--two-rocm-contexts-hang-gpu1-at-firmware-level) | (c)/(d) | Two ROCm contexts hang GPU1 at firmware level | Mitigated | resolved (policy) | If driver changes |
 | [U3](#u3--oracledecode_q2_0_g64-decodes-garbage) | (d) | `oracle.decode_q2_0_g64` (type 42) decodes garbage | Open | open | Yes — cheap fix |
@@ -203,6 +204,14 @@ a latent bug); they are recorded for completeness only.
   end-to-end QAT is the only route to it. The route was priced and consciously
   skipped, because Prism's result is public and Track B already ships it. This
   is a budget/scope decision, not an inability to proceed.
+- **[rev 2026-09-22] Held-out number retracted.** The "Outcome" figure
+  (student 42.988 vs teacher 38.966 = 1.103×) was measured on windows that were
+  part of the training pool: `build_batches` had no holdout and
+  `evaluate_perplexity` read `[samples, samples + eval_windows)` windows. A
+  clean-holdout re-run of the same recipe gives ~2.0× at 7000 steps. See
+  [F11](#f11--t28-holdout-leak-evaluation-on-training-windows). The mission-level
+  shortfall is therefore larger than 90.6% implies; the scope decision above
+  (do not fund the 27B proof-run) is unchanged.
 
 ## F6 — Student-stream block-wise KD dead-end
 
@@ -303,6 +312,47 @@ a latent bug); they are recorded for completeness only.
 - **What it rules out:** blind `-ngl 99` on a single card; naive context sizing.
 - **Cost to revisit:** none.
 - **Worth re-assessing?** No.
+
+## F11 — T28 holdout leak (evaluation on training windows)
+
+- **Category:** (a) correction — a previously reported result fails on
+  re-measurement.
+- **Claim/hypothesis (as published):** The T28 1.7B STE+KD run reached a
+  held-out **1.103× / 90.6% retention** ([F5](#f5--the-last-8-was-localized-to-end-to-end-qat-and-deliberately-not-funded)).
+- **Method:** Re-inspection of [`bonsai_forensics/recover.py`](../bonsai_forensics/recover.py)
+  plus a clean-holdout re-run. `build_batches` sampled windows from
+  `ids[:usable]` with **no exclusion** (recover.py:138-142), while
+  `evaluate_perplexity` evaluated at `start = samples * seq_len` = `32 * 512` =
+  `16384`, i.e. tokens `[16384, 18432)` (recover.py:166-175) — inside that same
+  pool. Over 5000 steps at batch 2, each eval window was sampled ~17 times. The
+  same recipe (STE g128 + KD T=2 + Adafactor, batch 2, seq 512, lr 5e-5) was
+  re-run in a harness that holds the last 4 windows out entirely
+  (`scripts/pilot/rmd_kd.py --ste`, `train = ids[:-4]`, `eval = ids[-4:]`).
+- **Outcome:** The published 1.103× is a **train-set (memorized) figure**. Clean
+  holdout of the same recipe: 5000 steps = **2.22×**, 7000 steps = **2.01×**.
+  A region diagnostic (`/tmp/opencode/diag_regions.py`) shows absmean-STE
+  quantization of the base is catastrophic on both T28's region (145,702×) and
+  the rmd region (135,953×), confirming the harness is not miscalculating; the
+  base quant is genuinely that bad before training.
+- **Verdict:** **Reported result retracted.** The 90.6% retention figure does
+  not survive a clean holdout; the mission-level shortfall is larger than
+  stated. The scope decision in F5 is unchanged.
+- **Evidence:** private record
+  `hivebench/artifacts/ternary/recover/run1/recover-report-s5000.json`
+  (config `samples 32, seq_len 512, batch 2, steps 5000`; student 42.988 vs
+  teacher 38.966); [`docs/EXPERIMENTS.md`](EXPERIMENTS.md) STE section
+  (2026-09-22); `artifacts/rmd/ste-control-7k/rmd-report.json`.
+- **Status:** open (correction propagated to
+  [`docs/WHITEPAPER.md`](WHITEPAPER.md) sections 3, 4, 5 and 7; F5 rev note).
+- **What it rules out:** citing 1.103× / 90.6% as a held-out result, and the
+  inference that the 1.7B pilot was close to the mission bar. It does **not**
+  rule out STE+KD training as a route.
+- **Cost to revisit:** low — the harness holdout fix
+  (`build_batches(..., holdout_windows=...)`) plus a re-run are cheap. An exact
+  re-evaluation of the original T28 checkpoint is impossible: no checkpoint was
+  saved.
+- **Worth re-assessing?** Yes — re-baseline 1.7B retention on a clean holdout
+  before judging any further variant.
 
 ## U1 — Internal tooling drift blocked harness imports
 
