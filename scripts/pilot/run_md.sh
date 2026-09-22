@@ -1,9 +1,9 @@
 #!/bin/bash
 set -u
-cd /home/penis/Desktop/work/bonsai-ternary-forensics
+cd ~/Desktop/work/bonsai-ternary-forensics
 PY=~/.unsloth/studio/unsloth_studio/bin/python
-MODEL=/home/penis/Desktop/work/hivebench/artifacts/ternary/canary/hf
-CORPUS=/home/penis/Desktop/work/hivebench/artifacts/ternary/canary/tinyshakespeare.txt
+MODEL=~/Desktop/work/hivebench/artifacts/ternary/canary/hf
+CORPUS=~/Desktop/work/hivebench/artifacts/ternary/canary/tinyshakespeare.txt
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 SCALE=${1:-1.0}
 echo "=== cand3: RMD mirror-map update (md-q=8, lam=0, lr-scale=$SCALE) ==="

@@ -32,6 +32,10 @@ Variants:
   gate/up absorb `W R^T`, o_proj/down absorb `R W` with `b' = R b`; the
   forward keeps the unrotated function exactly.
 - `--gate G`: freeze the top G fraction by |w| per tensor at init.
+- `--ste`: ternarize the forward (T28 `ternary_ste`, absmean STE) so the
+  reported ratio is the DEPLOYED ternary model's PPL ratio, directly
+  comparable to T28's 1.103x. Without it the reported ratio is the
+  projection cost of FP-trained masters, which is a different number.
 """
 
 from __future__ import annotations
@@ -51,7 +55,7 @@ import torch.nn.functional as F
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from bonsai_forensics.quant import quantize_rtn_absmean  # noqa: E402
-from bonsai_forensics.recover import TARGET_SUFFIXES  # noqa: E402
+from bonsai_forensics.recover import TARGET_SUFFIXES, TernaryLinear, wrap_ternary  # noqa: E402
 from bonsai_forensics.rotation import absorb_input, absorb_output, hadamard, rotations_for  # noqa: E402
 
 
@@ -280,10 +284,18 @@ def run(args) -> dict:
 
     student = AutoModelForCausalLM.from_pretrained(args.model_dir, dtype=torch.bfloat16).to(device)
     student.gradient_checkpointing_enable()
-    linears = target_linears(student)
-    if args.rotate:
-        linears = wrap_rotated(student, args.seed)
-        print(f"[rmd] rotated {len(linears)} target linears into the spec basis", flush=True)
+    if args.ste:
+        if args.rotate:
+            raise SystemExit("--ste and --rotate are not combined in this harness (T28 is unrotated)")
+        wrap_ternary(student)
+        linears = [m for m in student.modules() if isinstance(m, TernaryLinear)]
+        print(f"[rmd] STE ternary forward on {len(linears)} target linears "
+              f"(deployed-model ratio, comparable to T28 1.103x)", flush=True)
+    else:
+        linears = target_linears(student)
+        if args.rotate:
+            linears = wrap_rotated(student, args.seed)
+            print(f"[rmd] rotated {len(linears)} target linears into the spec basis", flush=True)
     masks = magnitude_masks(linears, args.gate)
     for p in student.parameters():
         p.requires_grad_(False)
@@ -301,21 +313,33 @@ def run(args) -> dict:
            "reproject_every": args.reproject_every, "reproject_init": args.reproject_init,
            "eval_pre_snap": args.eval_pre_snap, "teacher_ppl": round(teacher_ppl, 4),
            "steps": args.steps, "seq": args.seq, "seed": args.seed,
-           "update": args.update, "md_q": args.md_q, "rotate": args.rotate, "events": []}
+           "update": args.update, "md_q": args.md_q, "md_shell": args.md_shell,
+           "rotate": args.rotate, "ste": args.ste, "events": []}
 
     def report(step, label, projected=False):
         ev = {"step": step, "label": label}
         if projected:
-            # Evaluate on a deep copy: projection must never mutate the
-            # training masters (an in-place projection reset the weights at
-            # every checkpoint and corrupted the first ternary-attractor run).
-            s = copy.deepcopy(student)
-            project_ternary(s)
-            s_ppl = ppl(s, eval_windows, device)
-            ev["projected_ppl"] = round(s_ppl, 3)
-            ev["projected_ratio"] = round(s_ppl / teacher_ppl, 4)
-            del s
-            print(f"[rmd] {label} step {step}: projected_ratio {ev['projected_ratio']}", flush=True)
+            if args.ste:
+                # The forward already uses ternary weights, so the student IS
+                # the deployed model; PPL it directly. This is the ratio that
+                # is comparable to T28's 1.103x (projected_ratio of FP masters
+                # is a different quantity, the post-hoc projection cost).
+                s_ppl = ppl(student, eval_windows, device)
+                student.train()
+                ev["deployed_ppl"] = round(s_ppl, 3)
+                ev["projected_ratio"] = round(s_ppl / teacher_ppl, 4)
+                print(f"[rmd] {label} step {step}: deployed_ratio {ev['projected_ratio']}", flush=True)
+            else:
+                # Evaluate on a deep copy: projection must never mutate the
+                # training masters (an in-place projection reset the weights at
+                # every checkpoint and corrupted the first ternary-attractor run).
+                s = copy.deepcopy(student)
+                project_ternary(s)
+                s_ppl = ppl(s, eval_windows, device)
+                ev["projected_ppl"] = round(s_ppl, 3)
+                ev["projected_ratio"] = round(s_ppl / teacher_ppl, 4)
+                del s
+                print(f"[rmd] {label} step {step}: projected_ratio {ev['projected_ratio']}", flush=True)
         ev.update(concentration(linears))
         log["events"].append(ev)
 
@@ -330,6 +354,7 @@ def run(args) -> dict:
         print("[rmd] snapped init masters to the ternary grid", flush=True)
 
     started = time.time()
+    torch.cuda.reset_peak_memory_stats(device)
     student.train()
     step = 0
     while step < args.steps:
@@ -373,6 +398,8 @@ def run(args) -> dict:
 
     report(args.steps, "final", projected=True)
     log["seconds"] = round(time.time() - started, 1)
+    log["peak_allocated_gib"] = round(torch.cuda.max_memory_allocated(device) / 2**30, 2)
+    log["peak_reserved_gib"] = round(torch.cuda.max_memory_reserved(device) / 2**30, 2)
     (out / "rmd-report.json").write_text(json.dumps(log, indent=2), encoding="utf-8")
     print(f"[rmd] wrote {out / 'rmd-report.json'}", flush=True)
     return log
@@ -410,6 +437,9 @@ def main(argv=None) -> int:
                              "when > 0 overrides --md-lr-scale with scale = shell^(q-1)/lr")
     parser.add_argument("--rotate", action="store_true",
                         help="train in the spec-rotated basis (W' = W R^T per target linear)")
+    parser.add_argument("--ste", action="store_true",
+                        help="ternarize the forward (T28 absmean STE) so the reported ratio is the "
+                             "deployed ternary model's PPL ratio, comparable to T28 1.103x")
     parser.add_argument("--steps", type=int, default=3000)
     parser.add_argument("--seq", type=int, default=512)
     parser.add_argument("--batch", type=int, default=2)
