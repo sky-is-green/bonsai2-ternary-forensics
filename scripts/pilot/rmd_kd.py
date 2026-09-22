@@ -308,6 +308,14 @@ def run(args) -> dict:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
+    def save_checkpoint(step):
+        # Master weights only (`TernaryLinear`/`RotatedLinear` store the
+        # trainable master as `weight`; the ternary forward is deterministic).
+        # CPU copies so the save does not hold GPU memory.
+        state = {k: v.detach().cpu() for k, v in student.state_dict().items()}
+        torch.save({"config": vars(args), "state": state, "step": step}, out / "student.pt")
+        print(f"[rmd] saved checkpoint step {step} -> {out / 'student.pt'}", flush=True)
+
     teacher_ppl = ppl(teacher, eval_windows, teacher_device)
     log = {"q": args.q, "lam": args.lam, "pot": args.pot, "gate": args.gate,
            "reproject_every": args.reproject_every, "reproject_init": args.reproject_init,
@@ -393,10 +401,13 @@ def run(args) -> dict:
                 print(f"[rmd] step {step}/{args.steps} loss {loss.item():.2f} {sec:.0f}s", flush=True)
             if args.project_every and step % args.project_every == 0:
                 report(step, "train", projected=True)
+            if args.save_every and step % args.save_every == 0:
+                save_checkpoint(step)
             if step >= args.steps:
                 break
 
     report(args.steps, "final", projected=True)
+    save_checkpoint(args.steps)
     log["seconds"] = round(time.time() - started, 1)
     log["peak_allocated_gib"] = round(torch.cuda.max_memory_allocated(device) / 2**30, 2)
     log["peak_reserved_gib"] = round(torch.cuda.max_memory_reserved(device) / 2**30, 2)
@@ -448,6 +459,10 @@ def main(argv=None) -> int:
     parser.add_argument("--eval-windows", type=int, default=4)
     parser.add_argument("--log-every", type=int, default=250)
     parser.add_argument("--project-every", type=int, default=0)
+    parser.add_argument("--save-every", type=int, default=0,
+                        help="save a rolling student.pt every N steps (0 = only at the end). "
+                             "The state_dict holds the master weights; re-wrap with the same "
+                             "--ste/scale to reconstruct the deployed model.")
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--teacher-device", default="cuda:1")
