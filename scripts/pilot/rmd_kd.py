@@ -43,7 +43,6 @@ from __future__ import annotations
 import argparse
 import copy
 import json
-import math
 import sys
 import time
 from pathlib import Path
@@ -55,19 +54,39 @@ import torch.nn.functional as F
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from bonsai_forensics.quant import quantize_rtn_absmean  # noqa: E402
+from bonsai_forensics.evaluate import (  # noqa: E402
+    EvalRegion,
+    add_ratios,
+    evaluate_regions,
+    make_regions,
+    region_windows,
+    result_markdown,
+)
 from bonsai_forensics.recover import TARGET_SUFFIXES, TernaryLinear, wrap_ternary  # noqa: E402
 from bonsai_forensics.rotation import absorb_input, absorb_output, hadamard, rotations_for  # noqa: E402
 
 
-def load_windows(tokenizer, corpus: Path, seq: int, eval_windows: int):
-    ids = tokenizer(corpus.read_text(encoding="utf-8"), return_tensors="np")["input_ids"].reshape(-1)
-    n = (len(ids) // seq) * seq
-    ids = ids[:n].reshape(-1, seq)
-    if len(ids) <= eval_windows:
-        raise SystemExit(f"corpus too small: {len(ids)} windows")
-    train = ids[:-eval_windows]
-    eval = ids[-eval_windows:]
-    return train, eval
+def load_windows(tokenizer, corpus: Path, seq: int, eval_windows: int, eval_regions: int = 1):
+    """Return `(train_windows, corpus_ids, regions)`.
+
+    `eval_regions == 1` keeps the original tail holdout; `> 1` spreads that many
+    disjoint regions across the corpus (see `bonsai_forensics.evaluate`) and
+    excludes all of them from training, so multi-region PPL is clean.
+    """
+    corpus_ids = tokenizer(corpus.read_text(encoding="utf-8"), return_tensors="np")["input_ids"].reshape(-1)
+    n = (len(corpus_ids) // seq) * seq
+    corpus_ids = np.asarray(corpus_ids[:n], dtype=np.int64)
+    windows = corpus_ids.reshape(-1, seq)
+    if len(windows) <= eval_windows:
+        raise SystemExit(f"corpus too small: {len(windows)} windows")
+    if eval_regions <= 1:
+        regions = [EvalRegion("tail", (len(windows) - eval_windows) * seq, eval_windows)]
+    else:
+        regions = make_regions(n, seq, eval_windows, eval_regions)
+    keep = np.ones(len(windows), dtype=bool)
+    for start, stop in region_windows(regions, seq):
+        keep[start:stop] = False
+    return windows[keep], corpus_ids, regions
 
 
 def target_linears(model: torch.nn.Module):
@@ -133,19 +152,6 @@ def project_ternary(model):
             w = module.weight.detach().cpu().float().numpy()
             tq = quantize_rtn_absmean(w, 128)
             module.weight.data = torch.from_numpy(tq.dequantize().astype(np.float32)).to(device=module.weight.device, dtype=module.weight.dtype)
-
-
-@torch.no_grad()
-def ppl(model, windows, device):
-    model.eval()
-    losses = []
-    for w in windows:
-        ids = torch.tensor(w, dtype=torch.long, device=device).unsqueeze(0)
-        logits = model(ids).logits[0, :-1].float()
-        targets = ids[0, 1:]
-        loss = F.cross_entropy(logits, targets, reduction="mean")
-        losses.append(loss.item())
-    return math.exp(float(np.mean(losses)))
 
 
 def magnitude_masks(linears, gate: float):
@@ -274,8 +280,10 @@ def run(args) -> dict:
     teacher_device = torch.device(args.teacher_device)
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_dir)
-    train_windows, eval_windows = load_windows(tokenizer, Path(args.corpus), args.seq, args.eval_windows)
-    print(f"[rmd] train windows {train_windows.shape}, eval {eval_windows.shape}, q={args.q} lam={args.lam}", flush=True)
+    train_windows, corpus_ids, regions = load_windows(
+        tokenizer, Path(args.corpus), args.seq, args.eval_windows, args.eval_regions)
+    print(f"[rmd] train windows {train_windows.shape}, eval {len(regions)} region(s) "
+          f"x {args.eval_windows} windows, q={args.q} lam={args.lam}", flush=True)
 
     teacher = AutoModelForCausalLM.from_pretrained(args.model_dir, dtype=torch.bfloat16).to(teacher_device)
     teacher.eval()
@@ -316,40 +324,49 @@ def run(args) -> dict:
         torch.save({"config": vars(args), "state": state, "step": step}, out / "student.pt")
         print(f"[rmd] saved checkpoint step {step} -> {out / 'student.pt'}", flush=True)
 
-    teacher_ppl = ppl(teacher, eval_windows, teacher_device)
+    teacher_res = evaluate_regions(teacher, corpus_ids, args.seq, regions, teacher_device)
+    teacher_ppls = [r["ppl"] for r in teacher_res["regions"]]
+    teacher_ppl = float(np.mean(teacher_ppls))
     log = {"q": args.q, "lam": args.lam, "pot": args.pot, "gate": args.gate,
            "reproject_every": args.reproject_every, "reproject_init": args.reproject_init,
            "eval_pre_snap": args.eval_pre_snap, "teacher_ppl": round(teacher_ppl, 4),
+           "eval_regions": args.eval_regions, "eval_windows": args.eval_windows,
            "steps": args.steps, "seq": args.seq, "seed": args.seed,
            "update": args.update, "md_q": args.md_q, "md_shell": args.md_shell,
            "rotate": args.rotate, "ste": args.ste, "events": []}
 
+    def eval_deployed():
+        """Evaluate the deployed model across all regions (JSON-ready result)."""
+        if args.ste:
+            # The forward already uses ternary weights, so the student IS the
+            # deployed model.
+            res = evaluate_regions(student, corpus_ids, args.seq, regions, device)
+            student.train()
+        else:
+            # Evaluate on a deep copy: projection must never mutate the
+            # training masters (an in-place projection reset the weights at
+            # every checkpoint and corrupted the first ternary-attractor run).
+            s = copy.deepcopy(student)
+            project_ternary(s)
+            res = evaluate_regions(s, corpus_ids, args.seq, regions, device)
+            del s
+        return add_ratios(res, teacher_ppls)
+
     def report(step, label, projected=False):
         ev = {"step": step, "label": label}
+        res = None
         if projected:
-            if args.ste:
-                # The forward already uses ternary weights, so the student IS
-                # the deployed model; PPL it directly. This is the ratio that
-                # is comparable to T28's 1.103x (projected_ratio of FP masters
-                # is a different quantity, the post-hoc projection cost).
-                s_ppl = ppl(student, eval_windows, device)
-                student.train()
-                ev["deployed_ppl"] = round(s_ppl, 3)
-                ev["projected_ratio"] = round(s_ppl / teacher_ppl, 4)
-                print(f"[rmd] {label} step {step}: deployed_ratio {ev['projected_ratio']}", flush=True)
-            else:
-                # Evaluate on a deep copy: projection must never mutate the
-                # training masters (an in-place projection reset the weights at
-                # every checkpoint and corrupted the first ternary-attractor run).
-                s = copy.deepcopy(student)
-                project_ternary(s)
-                s_ppl = ppl(s, eval_windows, device)
-                ev["projected_ppl"] = round(s_ppl, 3)
-                ev["projected_ratio"] = round(s_ppl / teacher_ppl, 4)
-                del s
-                print(f"[rmd] {label} step {step}: projected_ratio {ev['projected_ratio']}", flush=True)
+            res = eval_deployed()
+            ev["regions"] = res["regions"]
+            ev["aggregate"] = res["aggregate"]
+            ev["projected_ratio"] = round(res["aggregate"]["mean_ratio"], 4)
+            kind = "deployed" if args.ste else "projected"
+            print(f"[rmd] {label} step {step}: {kind}_ratio {ev['projected_ratio']} "
+                  f"(min {res['aggregate']['min_ratio']:.3f}, "
+                  f"max {res['aggregate']['max_ratio']:.3f})", flush=True)
         ev.update(concentration(linears))
         log["events"].append(ev)
+        return res
 
     # baseline: projection ratio before any training (pure RTN)
     report(0, "init", projected=True)
@@ -406,8 +423,14 @@ def run(args) -> dict:
             if step >= args.steps:
                 break
 
-    report(args.steps, "final", projected=True)
+    final_res = report(args.steps, "final", projected=True)
     save_checkpoint(args.steps)
+    # UI-ready artefacts: structured JSON is the data contract, the Markdown is
+    # preview-friendly (Review pane / dashboard).
+    (out / "eval-regions.json").write_text(json.dumps(final_res, indent=2), encoding="utf-8")
+    (out / "eval-regions.md").write_text(
+        result_markdown(final_res, title=f"{out.name} multi-region evaluation"), encoding="utf-8")
+    print(f"[rmd] wrote {out / 'eval-regions.json'} and {out / 'eval-regions.md'}", flush=True)
     log["seconds"] = round(time.time() - started, 1)
     log["peak_allocated_gib"] = round(torch.cuda.max_memory_allocated(device) / 2**30, 2)
     log["peak_reserved_gib"] = round(torch.cuda.max_memory_reserved(device) / 2**30, 2)
@@ -456,7 +479,11 @@ def main(argv=None) -> int:
     parser.add_argument("--batch", type=int, default=2)
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--temp", type=float, default=2.0)
-    parser.add_argument("--eval-windows", type=int, default=4)
+    parser.add_argument("--eval-windows", type=int, default=4,
+                        help="windows per evaluation region")
+    parser.add_argument("--eval-regions", type=int, default=1,
+                        help="number of disjoint held-out regions scored (1 = the original tail "
+                             "holdout; >1 spreads them across the corpus for a mean/spread report)")
     parser.add_argument("--log-every", type=int, default=250)
     parser.add_argument("--project-every", type=int, default=0)
     parser.add_argument("--save-every", type=int, default=0,
