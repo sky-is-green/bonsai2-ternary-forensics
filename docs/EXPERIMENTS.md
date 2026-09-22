@@ -179,6 +179,81 @@ Six runs, 8 regions x 8 windows each, all rotation + STE:
   ([F8](FAILURES.md#f8--entropyexcess-loss-data-selection-lost-to-random)), a
   harder distribution, so it is not a clean data-scale test.
 
+### 20000 steps diverge under a constant LR (2026-09-22) — negative result
+
+The 20000-step rotation + STE run finished and it is **worse at the end than at
+16000**. Longer training at a constant LR did not help; it diverged.
+
+| step | mean ratio | retention |
+|---|---|---|
+| 5000 | 1.3683x | 73.1% |
+| 10000 | 1.2152x | 82.3% |
+| **16000 (best)** | **1.1603x** | **86.2%** |
+| 20000 (final) | **1.2930x** | **77.3%** |
+
+Final region table (8 regions x 8 windows): mean 1.2930x, min 1.0838, max
+1.6409, std 0.1544.
+
+```
+16000: 1.1603   <- best
+17500: 1.1913
+20000: 1.2930   <- final
+```
+
+Constant `lr=5e-5` with Adafactor and no schedule. The run does not plateau, it
+**walks off the good region** — so the earlier "the curve has not plateaued"
+note is struck. Two consequences:
+
+- **Length is not the lever.** The best *complete* run remains 10000 steps
+  (1.2152x / 82.3%). The 20000-step run must be quoted as **1.1603x / 86.2%
+  (best, step 16000)** with the divergence noted, never as 1.2930x.
+- **A rolling `student.pt` is not a checkpoint.** `--save-every 5000` overwrote
+  the step-16000 best with the step-20000 divergence; the best weights are gone.
+  Best-by-eval retention is mandatory.
+
+#### Managed decay (the response)
+
+The problem shape is the one the retention layer already solves: a policy that
+must decay when a signal goes stale, rather than committing to a fixed schedule
+in advance. The Sharp Decay Matrix (`splinter/retention/decay.py`: per-item
+decay, `age_factor` clamped at 3.0) and the remembrance ladder
+(`remembrance.py`: `decay_multiplier *= 1.8 + 0.3*times_saved`) supply the design
+vocabulary — event-driven, multiplicative, **bounded**, and with the hard-won
+lesson that over-steep decay is destructive (`decay_multiplier_init` 1.8 -> 1.1
+"killed persistent facts").
+
+Applied to the LR, in `bonsai_forensics/schedule.py` (`PlateauDecay`, pure
+stdlib, 8 tests):
+
+- **warmup guard** — `--lr-decay-warmup` suppresses decay during exploration.
+  This is not decoration: the early metric is legitimately noisy (the 20k run
+  jumped **+19% between adjacent evals** at step 5000) while still trending down,
+  so an unguarded reactive policy fires immediately and wastes the run. Best and
+  the improvement clock are still tracked through warmup.
+- **plateau trigger** — no new best for `--lr-decay-patience` steps;
+- **drift trigger** — the mean ratio worsens by `--lr-decay-drift-eps` of the
+  best, decaying immediately (the P2-DILUTION idea: penalise the drift instead
+  of rewarding it);
+- **multiplicative** `--lr-decay-factor` per event, **bounded** by
+  `--lr-decay-max` events, `--lr-decay-cooldown`, and `--lr-floor`;
+- **`--save-best`** writes `student-best.pt` whenever the held-out mean improves.
+
+Next run (same seed/recipe as `ste-rotate-20k`, so the two are nested and
+directly comparable). `drift_eps` is **0.10**, not 0.05, because 0.05 fires in
+the early noise; 0.10 does not fire until the real late jump (step 16000 ->
+16500 is +13.8%):
+
+```
+--steps 20000 --project-every 500 --save-every 5000 --save-best \
+--lr-decay-warmup 10000 --lr-decay-patience 2000 --lr-decay-factor 0.5 \
+--lr-decay-drift-eps 0.10 --lr-decay-cooldown 1000 --lr-decay-max 3 \
+--lr-floor 5e-6
+```
+
+Success criterion: best-so-far below 1.1603x, and no final divergence. If the
+decayed run still stalls near 1.10-1.16x, the recipe — not the schedule — is the
+remaining lever.
+
 ## Runtime note: what actually sets the pace
 
 CORRECTION: the cards run at the same pace. A same-config 200-step tern probe
@@ -232,19 +307,26 @@ projection is now an explicit, legitimate variant.
 ## Current candidates, in order
 
 All candidates are judged in the STE/deployed metric (`--ste`). The clean
-multi-region baseline is **2.09x mean** (~48%); the current best is
-**rotation + STE at 10000 steps, 1.2152x mean / 82.3%**. The 1.103x and
-single-region 1.219x are retracted.
+multi-region baseline is **2.09x mean** (~48%). The best *complete* run is
+**rotation + STE at 10000 steps, 1.2152x mean / 82.3%**; the best *point* seen is
+**1.1603x / 86.2% at step 16000** of the 20000-step run, which then diverged
+(below). The 1.103x and single-region 1.219x are retracted.
 
 1. DONE: rotation + STE replicated at 5000 steps (1.3683x / 1.4134x / 1.4015x,
    ~72%); length reaches **1.2152x / 82.3% at 10000 steps**, still trending down.
 2. DONE: learnable per-group scales (LSQ) are marginal (1.3397x, within noise).
 3. DONE: mirror map falsified in the rotated basis too (8.5400x).
 4. DONE: `selected.txt` is worse (2.4515x); a neutral larger corpus is untested.
-5. NEXT: extend length (20000 steps) and length + LSQ; the curve has not
-   plateaued.
-6. Optional: `--gate 0.2`, low-lam tern potential, an LR schedule or decay.
-7. Replicate the best config across seeds before any 27B work.
+5. DONE (negative): 20000 steps at a constant LR peaked at **1.1603x / 86.2% at
+   step 16000** then diverged to **1.2930x / 77.3%** at step 20000. Length is not
+   the lever; the best complete run remains 10000 steps (1.2152x / 82.3%).
+6. IN FLIGHT: managed decay + `--save-best` — 20000 steps, same seed/recipe,
+   with warmup-guarded plateau/drift LR reduction (`--lr-decay-warmup 10000
+   --lr-decay-patience 2000 --lr-decay-drift-eps 0.10 --lr-decay-factor 0.5
+   --lr-decay-cooldown 1000 --lr-decay-max 3 --lr-floor 5e-6`). Success: best
+   below 1.1603x with no final divergence.
+7. Then: `--gate 0.2`, low-lam tern potential, and a neutral larger corpus.
+8. Replicate the best config across seeds before any 27B work.
 
 ## Papers
 

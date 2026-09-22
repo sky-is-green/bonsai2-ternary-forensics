@@ -64,6 +64,7 @@ from bonsai_forensics.evaluate import (  # noqa: E402
 )
 from bonsai_forensics.recover import GROUP, TARGET_SUFFIXES, TernaryLinear, ternary_ste, wrap_ternary  # noqa: E402
 from bonsai_forensics.rotation import absorb_input, absorb_output, hadamard, rotations_for  # noqa: E402
+from bonsai_forensics.schedule import PlateauDecay  # noqa: E402
 
 
 def load_windows(tokenizer, corpus: Path, seq: int, eval_windows: int, eval_regions: int = 1):
@@ -373,13 +374,37 @@ def run(args) -> dict:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
-    def save_checkpoint(step):
+    def _snapshot(step, state_path):
         # Master weights only (`TernaryLinear`/`RotatedLinear` store the
         # trainable master as `weight`; the ternary forward is deterministic).
         # CPU copies so the save does not hold GPU memory.
         state = {k: v.detach().cpu() for k, v in student.state_dict().items()}
-        torch.save({"config": vars(args), "state": state, "step": step}, out / "student.pt")
+        torch.save({"config": vars(args), "state": state, "step": step}, state_path)
+
+    def save_checkpoint(step):
+        _snapshot(step, out / "student.pt")
         print(f"[rmd] saved checkpoint step {step} -> {out / 'student.pt'}", flush=True)
+
+    def save_best_checkpoint(step):
+        _snapshot(step, out / "student-best.pt")
+        print(f"[rmd] saved BEST checkpoint step {step} -> {out / 'student-best.pt'}", flush=True)
+
+    # Managed decay (schedule.py): the 20k constant-LR run peaked at 1.1603 and
+    # diverged to 1.2930, so the LR must react to the held-out metric. A rolling
+    # student.pt is overwritten by the final save, so keep the best separately.
+    base_lr = args.lr
+    decay = None
+    if args.lr_decay_patience > 0 or args.lr_decay_drift_eps > 0:
+        decay = PlateauDecay(
+            patience=args.lr_decay_patience, factor=args.lr_decay_factor,
+            max_events=args.lr_decay_max, min_delta=args.lr_decay_min_delta,
+            drift_eps=args.lr_decay_drift_eps, cooldown=args.lr_decay_cooldown,
+            warmup=args.lr_decay_warmup)
+        print(f"[rmd] managed decay on: patience={args.lr_decay_patience} "
+              f"factor={args.lr_decay_factor} drift_eps={args.lr_decay_drift_eps} "
+              f"warmup={args.lr_decay_warmup} max={args.lr_decay_max} "
+              f"floor={args.lr_floor}", flush=True)
+    best_ratio = None
 
     teacher_res = evaluate_regions(teacher, corpus_ids, args.seq, regions, teacher_device)
     teacher_ppls = [r["ppl"] for r in teacher_res["regions"]]
@@ -474,7 +499,22 @@ def run(args) -> dict:
                 sec = time.time() - started
                 print(f"[rmd] step {step}/{args.steps} loss {loss.item():.2f} {sec:.0f}s", flush=True)
             if args.project_every and step % args.project_every == 0:
-                report(step, "train", projected=True)
+                res = report(step, "train", projected=True)
+                if res is not None:
+                    ratio = float(res["aggregate"]["mean_ratio"])
+                    if args.save_best and (best_ratio is None or ratio < best_ratio):
+                        best_ratio = ratio
+                        save_best_checkpoint(step)
+                    if decay is not None:
+                        decay.observe(step, ratio)
+                        new_lr = decay.apply(base_lr, args.lr_floor)
+                        if new_lr != args.lr:
+                            args.lr = new_lr
+                            for group in opt.param_groups:
+                                group["lr"] = new_lr
+                            print(f"[rmd] managed decay: lr -> {new_lr:.4g} "
+                                  f"(event {decay.events}, multiplier {decay.multiplier:.4g})",
+                                  flush=True)
             if args.save_every and step % args.save_every == 0:
                 save_checkpoint(step)
             if step >= args.steps:
@@ -482,6 +522,19 @@ def run(args) -> dict:
 
     final_res = report(args.steps, "final", projected=True)
     save_checkpoint(args.steps)
+    if final_res is not None:
+        final_ratio = float(final_res["aggregate"]["mean_ratio"])
+        if args.save_best and (best_ratio is None or final_ratio < best_ratio):
+            best_ratio = final_ratio
+            save_best_checkpoint(args.steps)
+        if decay is not None:
+            decay.observe(args.steps, final_ratio)
+            log["lr_decay_events"] = decay.events
+            log["lr_final"] = decay.apply(base_lr, args.lr_floor)
+            log["lr_decay_history"] = [[int(s), float(r)] for s, r in decay.history]
+        if best_ratio is not None:
+            log["best_mean_ratio"] = round(best_ratio, 4)
+            log["best_retention"] = round(100.0 / best_ratio, 1)
     # UI-ready artefacts: structured JSON is the data contract, the Markdown is
     # preview-friendly (Review pane / dashboard).
     (out / "eval-regions.json").write_text(json.dumps(final_res, indent=2), encoding="utf-8")
@@ -556,6 +609,30 @@ def main(argv=None) -> int:
                              "fixed while varying --seed for replication")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--teacher-device", default="cuda:1")
+    # Managed decay: event-driven, bounded, multiplicative LR reduction driven
+    # by the held-out metric (schedule.py). 0 patience + 0 drift_eps = off.
+    parser.add_argument("--lr-decay-patience", type=int, default=0,
+                        help="steps without a new best before the LR is multiplied by "
+                             "--lr-decay-factor (0 = off). Event-driven managed decay.")
+    parser.add_argument("--lr-decay-factor", type=float, default=0.5,
+                        help="multiplicative drop per decay event")
+    parser.add_argument("--lr-decay-min-delta", type=float, default=0.0,
+                        help="an improvement must beat best - delta to reset the patience clock")
+    parser.add_argument("--lr-decay-drift-eps", type=float, default=0.0,
+                        help=">0: decay immediately when the mean ratio worsens by this "
+                             "fraction of the best (penalise drift, do not reward it)")
+    parser.add_argument("--lr-decay-max", type=int, default=0,
+                        help="cap on decay events (0 = unlimited)")
+    parser.add_argument("--lr-decay-cooldown", type=int, default=0,
+                        help="minimum steps between decay events (0 = use patience)")
+    parser.add_argument("--lr-decay-warmup", type=int, default=0,
+                        help="no decay before this step: the early trajectory is noisy while "
+                             "still trending down, so a reactive policy must not fire in it")
+    parser.add_argument("--lr-floor", type=float, default=0.0,
+                        help="learning-rate floor under managed decay")
+    parser.add_argument("--save-best", action="store_true",
+                        help="also write student-best.pt whenever the held-out mean ratio "
+                             "improves, so a diverged tail cannot cost the best checkpoint")
     args = parser.parse_args(argv)
     if args.md_shell > 0:
         args.md_lr_scale = args.md_shell ** (args.md_q - 1) / args.lr
