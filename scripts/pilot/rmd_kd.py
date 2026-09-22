@@ -62,7 +62,7 @@ from bonsai_forensics.evaluate import (  # noqa: E402
     region_windows,
     result_markdown,
 )
-from bonsai_forensics.recover import TARGET_SUFFIXES, TernaryLinear, ternary_ste, wrap_ternary  # noqa: E402
+from bonsai_forensics.recover import GROUP, TARGET_SUFFIXES, TernaryLinear, ternary_ste, wrap_ternary  # noqa: E402
 from bonsai_forensics.rotation import absorb_input, absorb_output, hadamard, rotations_for  # noqa: E402
 
 
@@ -177,6 +177,37 @@ def apply_gate_grads(linears, thresholds) -> None:
             m.weight.grad.mul_(mask)
 
 
+def _init_group_scale(w: torch.Tensor, group: int = GROUP) -> torch.Tensor:
+    """Per-group absmean scale of `w`, shape (out_features, n_groups, 1)."""
+    out, in_features = w.shape
+    n_groups = -(-in_features // group)
+    padded = torch.zeros(out, n_groups * group, device=w.device, dtype=torch.float32)
+    padded[:, :in_features] = w.detach().float()
+    blocks = padded.view(out, n_groups, group)
+    return blocks.abs().mean(dim=-1, keepdim=True).clamp_min(1e-8)
+
+
+def ternary_lsq(w: torch.Tensor, scale: torch.Tensor, group: int = GROUP) -> torch.Tensor:
+    """Ternary STE with a learnable per-group scale (LSQ-style).
+
+    Codes are `stop_gradient(round_half_away(w / scale))`; the scale keeps a
+    gradient through `codes * scale`, the master through the identity term.
+    """
+    out, in_features = w.shape
+    n_groups = -(-in_features // group)
+    padded = torch.zeros(out, n_groups * group, device=w.device, dtype=w.dtype)
+    padded[:, :in_features] = w
+    blocks = padded.view(out, n_groups, group)
+    s = scale.to(w.dtype)
+    with torch.no_grad():
+        scaled = blocks / s
+        codes = torch.clamp(torch.sign(scaled) * torch.floor(scaled.abs() + 0.5), -1, 1)
+    quantized = (codes * s).view(out, n_groups * group)[:, :in_features]
+    # Forward value is `quantized`. Gradients: identity to the master (STE), and
+    # identity to `quantized` so the learnable scale trains (LSQ).
+    return w + (quantized - w).detach() + (quantized - quantized.detach())
+
+
 class RotatedLinear(torch.nn.Linear):
     """nn.Linear carrying the spec-absorbed weight with the orthogonal
     rotation inserted into the forward so the unabsorbed function is preserved
@@ -186,20 +217,29 @@ class RotatedLinear(torch.nn.Linear):
     quantizes."""
 
     def __init__(self, base: torch.nn.Linear, rot_in: torch.Tensor | None,
-                 rot_out: torch.Tensor | None, ste: bool = False) -> None:
+                 rot_out: torch.Tensor | None, ste: bool = False,
+                 learn_scale: bool = False) -> None:
         super().__init__(base.in_features, base.out_features, bias=base.bias is not None)
         self.weight = torch.nn.Parameter(base.weight.detach().clone())
         self.bias = base.bias
         self.rot_in = rot_in
         self.rot_out = rot_out
         self.ste = ste
+        self.learn_scale = learn_scale
+        self.scale = None  # set by wrap_rotated after the rotated master is written
 
     def forward(self, x):
         if self.rot_in is not None:
             x = F.linear(x, self.rot_in)
         # With `ste`, ternarize the (rotated) master in the forward, so training
-        # is quantization-aware in the same basis the 27B stores.
-        weight = ternary_ste(self.weight) if self.ste else self.weight
+        # is quantization-aware in the same basis the 27B stores. With
+        # `learn_scale`, the per-group scale is a trainable parameter (LSQ).
+        if self.learn_scale:
+            weight = ternary_lsq(self.weight, self.scale)
+        elif self.ste:
+            weight = ternary_ste(self.weight)
+        else:
+            weight = self.weight
         y = F.linear(x, weight, self.bias)
         if self.rot_out is not None:
             y = F.linear(y, self.rot_out)
@@ -217,7 +257,8 @@ def _rot_tensor(width: int, seed: int, dtype=torch.float32, device="cuda:0") -> 
     return torch.from_numpy(out.astype(np.float32)).to(device=device, dtype=dtype)
 
 
-def wrap_rotated(model: torch.nn.Module, seed: int, ste: bool = False) -> list[torch.nn.Module]:
+def wrap_rotated(model: torch.nn.Module, seed: int, ste: bool = False,
+                 learn_scale: bool = False) -> list[torch.nn.Module]:
     """Absorb the spec rotation into every target linear (spec table 1.3:
     q/k/v, gate/up consume a rotated input (W R^T); o_proj/down emit a rotated
     output (R W, bias' = R b)) and keep the function exact via RotatedLinear
@@ -232,17 +273,20 @@ def wrap_rotated(model: torch.nn.Module, seed: int, ste: bool = False) -> list[t
         if name.endswith(("o_proj", "down_proj")):
             rots = rotations_for(module.out_features, seed, "hidden")
             w_abs = absorb_output(module.weight.detach().cpu().float().numpy(), rots)
-            repl = RotatedLinear(module, None, _rot_tensor(module.out_features, seed, module.weight.dtype, module.weight.device).transpose(-1, -2), ste=ste)
+            repl = RotatedLinear(module, None, _rot_tensor(module.out_features, seed, module.weight.dtype, module.weight.device).transpose(-1, -2), ste=ste, learn_scale=learn_scale)
             if module.bias is not None:
                 r = _rot_tensor(module.out_features, seed, torch.float32, module.weight.device)
                 repl.bias.data = (r @ module.bias.detach().cpu().float()).to(module.bias.dtype)
         else:
             rots = rotations_for(module.in_features, seed, "hidden")
             w_abs = absorb_input(module.weight.detach().cpu().float().numpy(), rots)
-            repl = RotatedLinear(module, _rot_tensor(module.in_features, seed, module.weight.dtype, module.weight.device), None, ste=ste)
+            repl = RotatedLinear(module, _rot_tensor(module.in_features, seed, module.weight.dtype, module.weight.device), None, ste=ste, learn_scale=learn_scale)
         repl.weight.data = torch.from_numpy(w_abs.astype(np.float32)).to(
             device=module.weight.device, dtype=module.weight.dtype)
         repl.weight.requires_grad_(True)
+        if learn_scale:
+            # Initialised from the rotated master, after it is written.
+            repl.scale = torch.nn.Parameter(_init_group_scale(repl.weight))
         setattr(parent, child, repl)
         wrapped.append(repl)
     return wrapped
@@ -299,8 +343,13 @@ def run(args) -> dict:
     student = AutoModelForCausalLM.from_pretrained(args.model_dir, dtype=torch.bfloat16).to(device)
     student.gradient_checkpointing_enable()
     if args.rotate:
-        linears = wrap_rotated(student, args.seed, ste=args.ste)
-        mode = "rotated + STE ternary" if args.ste else "rotated (FP forward)"
+        rot_seed = args.rot_seed or args.seed
+        linears = wrap_rotated(student, rot_seed, ste=args.ste, learn_scale=args.learn_scale)
+        mode = "rotated + STE ternary"
+        if args.learn_scale:
+            mode += " + learnable scales"
+        elif not args.ste:
+            mode = "rotated (FP forward)"
         print(f"[rmd] {mode} on {len(linears)} target linears", flush=True)
     elif args.ste:
         wrap_ternary(student)
@@ -314,9 +363,12 @@ def run(args) -> dict:
         p.requires_grad_(False)
     for m in linears:
         m.weight.requires_grad_(True)
+        if getattr(m, "scale", None) is not None:
+            m.scale.requires_grad_(True)
 
-    opt = Adafactor([p for m in linears for p in (m.weight,)],
-                    lr=args.lr, scale_parameter=False, relative_step=False)
+    trainable_params = [m.weight for m in linears]
+    trainable_params += [m.scale for m in linears if getattr(m, "scale", None) is not None]
+    opt = Adafactor(trainable_params, lr=args.lr, scale_parameter=False, relative_step=False)
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -478,7 +530,10 @@ def main(argv=None) -> int:
                         help="train in the spec-rotated basis (W' = W R^T per target linear)")
     parser.add_argument("--ste", action="store_true",
                         help="ternarize the forward (T28 absmean STE) so the reported ratio is the "
-                             "deployed ternary model's PPL ratio, comparable to T28 1.103x")
+                             "deployed ternary model's PPL ratio")
+    parser.add_argument("--learn-scale", action="store_true",
+                        help="with --ste --rotate: make the per-group ternary scale a trainable "
+                             "parameter (LSQ-style) instead of the fixed group absmean")
     parser.add_argument("--steps", type=int, default=3000)
     parser.add_argument("--seq", type=int, default=512)
     parser.add_argument("--batch", type=int, default=2)
@@ -496,6 +551,9 @@ def main(argv=None) -> int:
                              "The state_dict holds the master weights; re-wrap with the same "
                              "--ste/scale to reconstruct the deployed model.")
     parser.add_argument("--seed", type=int, default=1337)
+    parser.add_argument("--rot-seed", type=int, default=0,
+                        help="rotation PRF seed (0 = use --seed); set this to keep the basis "
+                             "fixed while varying --seed for replication")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--teacher-device", default="cuda:1")
     args = parser.parse_args(argv)

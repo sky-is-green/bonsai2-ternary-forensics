@@ -37,6 +37,26 @@ def test_rotated_linear_without_ste_uses_raw_master() -> None:
     assert torch.allclose(module.forward(x), expected, atol=1e-5)
 
 
+def test_init_group_scale_shape_and_values() -> None:
+    w = torch.ones(4, 256) * 0.1
+    scale = rmd._init_group_scale(w)
+    assert scale.shape == (4, 2, 1)
+    assert torch.allclose(scale, torch.full_like(scale, 0.1), atol=1e-6)
+
+
+def test_ternary_lsq_scale_receives_gradient() -> None:
+    torch.manual_seed(0)
+    w = (torch.randn(16, 256) * 0.05).requires_grad_(True)
+    scale = torch.nn.Parameter(rmd._init_group_scale(w))
+    out = rmd.ternary_lsq(w, scale)
+    out.sum().backward()
+    assert w.grad is not None and torch.isfinite(w.grad).all()
+    assert scale.grad is not None and torch.isfinite(scale.grad).all()
+    # Deployed (detached) output is codes * scale, i.e. on the integer grid.
+    ratio = out.detach().reshape(16, 2, 128) / scale.detach()
+    assert torch.allclose(ratio, ratio.round(), atol=1e-4)
+
+
 def test_ternary_ste_output_is_codes_times_original_absmean() -> None:
     torch.manual_seed(0)
     w = torch.randn(16, 256) * 0.05
