@@ -47,36 +47,48 @@ TARGET_SUFFIXES = (
 )
 
 
-def ternary_ste(w: torch.Tensor, group: int = GROUP) -> torch.Tensor:
-    """Forward ternary (half-away-from-zero) with straight-through gradients."""
+def ternary_ste(w: torch.Tensor, group: int = GROUP, scale: str = "absmean") -> torch.Tensor:
+    """Forward ternary (half-away-from-zero) with straight-through gradients.
+
+    `scale="absmean"` is the Bonsai-style per-group abs-mean norm (default,
+    preserves T28 behavior); `scale="absmax"` is the naive RTN per-group
+    abs-max norm used by the canary baseline.
+    """
     shape = w.shape
     in_features = shape[-1]
     n_groups = math.ceil(in_features / group)
     padded = torch.zeros(shape[0], n_groups * group, dtype=w.dtype, device=w.device)
     padded[:, :in_features] = w
     blocks = padded.view(shape[0], n_groups, group)
-    scale = blocks.abs().mean(dim=-1, keepdim=True).clamp_min(1e-8)
-    scaled = blocks / scale
+    if scale == "absmax":
+        scale_t = blocks.abs().amax(dim=-1, keepdim=True).clamp_min(1e-8)
+    elif scale == "absmean":
+        scale_t = blocks.abs().mean(dim=-1, keepdim=True).clamp_min(1e-8)
+    else:
+        raise ValueError(f"unknown scale mode {scale!r}, expected 'absmean' or 'absmax'")
+    scaled = blocks / scale_t
     codes = torch.clamp(torch.sign(scaled) * torch.floor(scaled.abs() + 0.5), -1, 1)
-    quantized = (codes * scale).view(shape[0], n_groups * group)[:, :in_features]
+    quantized = (codes * scale_t).view(shape[0], n_groups * group)[:, :in_features]
     return w + (quantized - w).detach()
 
 
 class TernaryLinear(torch.nn.Module):
     """nn.Linear whose weight is quantized with an STE during the forward."""
 
-    def __init__(self, base: torch.nn.Linear) -> None:
+    def __init__(self, base: torch.nn.Linear, *, scale: str = "absmean") -> None:
         super().__init__()
         self.weight = torch.nn.Parameter(base.weight.detach().clone())
         self.bias = base.bias
         self.in_features = base.in_features
         self.out_features = base.out_features
+        self.scale = scale
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.nn.functional.linear(x, ternary_ste(self.weight), self.bias)
+        return torch.nn.functional.linear(x, ternary_ste(self.weight, scale=self.scale), self.bias)
 
 
-def wrap_ternary(model: torch.nn.Module, suffixes: tuple[str, ...] = TARGET_SUFFIXES) -> int:
+def wrap_ternary(model: torch.nn.Module, suffixes: tuple[str, ...] = TARGET_SUFFIXES,
+                 *, scale: str = "absmean") -> int:
     """Replace matching `nn.Linear` modules in place; returns the count."""
     replaced = 0
     for name, module in list(model.named_modules()):
@@ -86,9 +98,27 @@ def wrap_ternary(model: torch.nn.Module, suffixes: tuple[str, ...] = TARGET_SUFF
             continue
         parent_name, _, child = name.rpartition(".")
         parent = model.get_submodule(parent_name) if parent_name else model
-        setattr(parent, child, TernaryLinear(module))
+        setattr(parent, child, TernaryLinear(module, scale=scale))
         replaced += 1
     return replaced
+
+
+def randomize_ternary(model: torch.nn.Module, *, seed: int = 0, scale: float = 0.02) -> int:
+    """Re-initialize every `TernaryLinear` master weight from a Gaussian.
+
+    Returns the count of randomized modules. The forward STE still clamps to
+    ternary codes, so this exercises the "random init" arm of the matrix
+    against the default (base-weights) init.
+    """
+    torch.manual_seed(seed)
+    count = 0
+    for module in model.modules():
+        if not isinstance(module, TernaryLinear):
+            continue
+        with torch.no_grad():
+            module.weight.normal_(0.0, scale)
+        count += 1
+    return count
 
 
 def freeze_non_ternary(model: torch.nn.Module) -> int:
@@ -103,10 +133,25 @@ def freeze_non_ternary(model: torch.nn.Module) -> int:
     return frozen
 
 
-def build_batches(ids: np.ndarray, seq_len: int, batch_size: int, seed: int = 0):
+def build_batches(ids: np.ndarray, seq_len: int, batch_size: int, seed: int = 0,
+                  holdout_windows: tuple[tuple[int, int], ...] = ()):
+    """Yield random `batch_size`-window batches from the corpus.
+
+    `holdout_windows` excludes one or more `[start, stop)` ranges of window
+    indices from sampling. `train()` passes the range that
+    `evaluate_perplexity` reads (`[samples, samples + eval_windows)`) so the
+    evaluation region is never trained on.
+    """
     rng = np.random.default_rng(seed)
     usable = (ids.size // seq_len) * seq_len
     windows = ids[:usable].reshape(-1, seq_len)
+    if holdout_windows:
+        keep = np.ones(windows.shape[0], dtype=bool)
+        for start, stop in holdout_windows:
+            keep[start:stop] = False
+        windows = windows[keep]
+        if windows.shape[0] == 0:
+            raise ValueError("holdout_windows removes every training window")
     while True:
         index = rng.integers(0, windows.shape[0], size=batch_size)
         yield torch.tensor(windows[index], dtype=torch.long)
@@ -116,6 +161,21 @@ def distillation_loss(student_logits, teacher_logits, temperature: float) -> tor
     student = torch.log_softmax(student_logits / temperature, dim=-1)
     teacher = torch.softmax(teacher_logits / temperature, dim=-1)
     return torch.nn.functional.kl_div(student, teacher, reduction="batchmean") * temperature ** 2
+
+
+def ce_loss(student_logits, target_ids) -> torch.Tensor:
+    """Next-token cross-entropy against the ground-truth ids (no teacher)."""
+    logits = student_logits[:, :-1].reshape(-1, student_logits.size(-1))
+    targets = target_ids[:, 1:].reshape(-1)
+    return torch.nn.functional.cross_entropy(logits, targets)
+
+
+def mixed_loss(student_logits, teacher_logits, target_ids, temperature: float,
+               ce_weight: float) -> torch.Tensor:
+    """`ce_weight`-scaled CE plus `(1 - ce_weight)`-scaled KD."""
+    kd = distillation_loss(student_logits, teacher_logits, temperature)
+    ce = ce_loss(student_logits, target_ids)
+    return (1.0 - ce_weight) * kd + ce_weight * ce
 
 
 def evaluate_perplexity(model, tokenizer, corpus: Path, samples: int, seq_len: int, eval_windows: int, device) -> float:
@@ -140,6 +200,11 @@ class TrainConfig:
     batch_size: int = 1
     lr: float = 5e-5
     temperature: float = 2.0
+    loss: str = "kd"          # "kd" (pure distillation), "ce", "mix"
+    ce_weight: float = 0.5    # CE share when loss == "mix"
+    init: str = "base"        # "base" (master = pretrained) or "random"
+    scale: str = "absmean"    # STE ternary scale: "absmean" or "absmax"
+    random_seed: int = 0
     device: str = "cuda:0"
     teacher_device: str = "cuda:1"
     save_every: int = 250
@@ -168,12 +233,19 @@ def train(config: TrainConfig) -> dict:
     student = AutoModelForCausalLM.from_pretrained(config.model_dir, dtype=torch.bfloat16).to(config.device)
     if config.grad_checkpointing:
         student.gradient_checkpointing_enable()
-    replaced = wrap_ternary(student)
+    replaced = wrap_ternary(student, scale=config.scale)
+    if config.init == "random":
+        randomize_ternary(student, seed=config.random_seed)
     frozen = freeze_non_ternary(student)
     trainable = [p for p in student.parameters() if p.requires_grad]
     optimizer = Adafactor(trainable, lr=config.lr, scale_parameter=False, relative_step=False, warmup_init=False)
 
-    batches = build_batches(ids, config.seq_len, config.batch_size)
+    # Hold out exactly the region evaluate_perplexity reads
+    # ([samples, samples + eval_windows) windows) so the held-out PPL is honest.
+    batches = build_batches(
+        ids, config.seq_len, config.batch_size,
+        holdout_windows=((config.samples, config.samples + config.eval_windows),),
+    )
     history = []
     student.train()
     start_step = 0
@@ -195,12 +267,23 @@ def train(config: TrainConfig) -> dict:
     for step in range(start_step + 1, config.steps + 1):
         batch = next(batches)
         student_inputs = batch.to(config.device)
-        with torch.no_grad():
-            teacher_logits = teacher(input_ids=batch.to(config.teacher_device)).logits.float()
+        if config.loss == "ce":
+            teacher_logits = None
+        else:
+            with torch.no_grad():
+                teacher_logits = teacher(input_ids=batch.to(config.teacher_device)).logits.float()
         outputs = student(input_ids=student_inputs)
-        loss = distillation_loss(
-            outputs.logits.float(), teacher_logits.to(outputs.logits.device), config.temperature
-        )
+        if config.loss == "kd":
+            loss = distillation_loss(
+                outputs.logits.float(), teacher_logits.to(outputs.logits.device), config.temperature
+            )
+        elif config.loss == "ce":
+            loss = ce_loss(outputs.logits.float(), student_inputs)
+        else:
+            loss = mixed_loss(
+                outputs.logits.float(), teacher_logits.to(outputs.logits.device),
+                student_inputs, config.temperature, config.ce_weight,
+            )
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(trainable, 1.0)
@@ -245,6 +328,11 @@ def main(argv=None) -> int:
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--temperature", type=float, default=2.0)
+    parser.add_argument("--loss", choices=("kd", "ce", "mix"), default="kd")
+    parser.add_argument("--ce-weight", type=float, default=0.5)
+    parser.add_argument("--init", choices=("base", "random"), default="base")
+    parser.add_argument("--scale", choices=("absmean", "absmax"), default="absmean")
+    parser.add_argument("--random-seed", type=int, default=0)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--teacher-device", default="cuda:1")
     parser.add_argument("--no-grad-checkpointing", action="store_true")
@@ -260,6 +348,11 @@ def main(argv=None) -> int:
         batch_size=args.batch_size,
         lr=args.lr,
         temperature=args.temperature,
+        loss=args.loss,
+        ce_weight=args.ce_weight,
+        init=args.init,
+        scale=args.scale,
+        random_seed=args.random_seed,
         device=args.device,
         teacher_device=args.teacher_device,
         grad_checkpointing=not args.no_grad_checkpointing,

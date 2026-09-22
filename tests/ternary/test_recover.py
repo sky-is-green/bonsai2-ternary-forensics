@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 
 from bonsai_forensics import recover
@@ -66,9 +67,67 @@ def test_distillation_loss_zero_for_identical_logits() -> None:
     assert float(loss) < 1e-6
 
 
+def test_ce_loss_matches_cross_entropy() -> None:
+    logits = torch.randn(2, 5, 8)
+    ids = torch.randint(0, 8, (2, 5))
+    expected = torch.nn.functional.cross_entropy(
+        logits[:, :-1].reshape(-1, 8), ids[:, 1:].reshape(-1)
+    )
+    assert torch.allclose(recover.ce_loss(logits, ids), expected)
+
+
+def test_mixed_loss_interpolates_kd_and_ce() -> None:
+    torch.manual_seed(0)
+    student_logits = torch.randn(2, 5, 8)
+    teacher_logits = torch.randn(2, 5, 8)
+    ids = torch.randint(0, 8, (2, 5))
+    kd = recover.distillation_loss(student_logits, teacher_logits, temperature=2.0)
+    ce = recover.ce_loss(student_logits, ids)
+    mix = recover.mixed_loss(student_logits, teacher_logits, ids, temperature=2.0, ce_weight=0.3)
+    assert torch.allclose(mix, 0.7 * kd + 0.3 * ce, atol=1e-5)
+
+
+def test_ternary_ste_absmax_scale_matches_round() -> None:
+    torch.manual_seed(0)
+    w = torch.randn(32, 256) * 0.05
+    out = recover.ternary_ste(w, scale="absmax")
+    groups = out.detach().reshape(32, 2, 128)
+    scales = groups.abs().amax(dim=-1, keepdim=True).clamp_min(1e-8)
+    ratio = groups / scales
+    assert torch.allclose(ratio, ratio.round(), atol=1e-5)
+
+
+def test_randomize_ternary_reinitializes_masters() -> None:
+    model = _Tiny()
+    before = model.q_proj.weight.detach().clone()
+    recover.wrap_ternary(model)
+    recover.randomize_ternary(model, seed=0)
+    after = model.q_proj.weight
+    assert not torch.equal(before, after)
+    assert torch.isfinite(after).all()
+
+
 def test_build_batches_yields_full_windows() -> None:
     ids = np.arange(1000)
     batches = recover.build_batches(ids, seq_len=100, batch_size=2, seed=0)
     batch = next(batches)
     assert batch.shape == (2, 100)
     assert int(batch.max()) < 1000
+
+
+def test_build_batches_never_samples_the_holdout() -> None:
+    # 20 windows of 10; exclude windows [5, 8) (tokens 50:80).
+    ids = np.arange(200)
+    holdout = ((5, 8),)
+    batches = recover.build_batches(ids, seq_len=10, batch_size=8, seed=0,
+                                    holdout_windows=holdout)
+    for _ in range(50):
+        batch = next(batches)
+        assert not ((batch >= 50) & (batch < 80)).any()
+
+
+def test_build_batches_holdout_covers_every_window() -> None:
+    ids = np.arange(100)
+    with pytest.raises(ValueError, match="every training window"):
+        next(recover.build_batches(ids, seq_len=10, batch_size=1, seed=0,
+                                   holdout_windows=((0, 10),)))
