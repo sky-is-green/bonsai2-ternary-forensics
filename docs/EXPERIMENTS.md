@@ -10,8 +10,9 @@ measured on training windows. The clean multi-region value for the plain STE
 control is **2.09x mean** (~48%, range 1.55-2.71x) over 8 held-out regions; a
 single-region 1.219x / 82% was also contaminated by a holdout/eval mismatch and
 is retracted too (rev 2026-09-22b). The corrected single-region T28 number is
-**1.746x / 57.3%**. Current best: **rotation + STE, 1.3683x mean / 73.1%**
-(clears the 1.44x gate on the mean).
+**1.746x / 57.3%**. Current best: **rotation + STE at 10000 steps, 1.2152x
+mean / 82.3%** (best region 1.077x); at 5000 steps it replicates at ~1.39x /
+~72% across three seeds.
 
 ## Hypothesis
 
@@ -155,6 +156,29 @@ versus 655,974x unrotated. This matches the projection-metric finding that the
 rotated basis was the single largest effect, and the public reading that the
 rotation is part of the training pipeline, not only the container.
 
+#### Rotation + STE batch: replication holds, length wins (2026-09-22)
+
+Six runs, 8 regions x 8 windows each, all rotation + STE:
+
+| run | mean | min | max | std | retention |
+|---|---|---|---|---|---|
+| seed 1337, 5000 steps | 1.3683x | 1.172 | 1.651 | 0.133 | 73.1% |
+| seed 2, 5000 steps | 1.4134x | 1.195 | 1.756 | 0.151 | 70.8% |
+| seed 3, 5000 steps | 1.4015x | 1.191 | 1.736 | 0.155 | 71.4% |
+| + learnable scales (LSQ), 5000 steps | 1.3397x | 1.173 | 1.630 | 0.134 | 74.6% |
+| **10000 steps** | **1.2152x** | **1.077** | 1.514 | 0.128 | **82.3%** |
+| + mirror map (q16, shell 0.020) | 8.5400x | 5.054 | 10.807 | 1.749 | 11.7% |
+| on `selected.txt` (~5x tokens) | 2.4515x | 2.053 | 3.146 | 0.378 | 40.8% |
+
+- **Replication holds:** three seeds at 5000 steps span 1.37-1.41x (~71-73%).
+- **Length is the next lever:** 10000 steps reaches 1.2152x (82.3%), best region
+  1.077x (92.8%), and the curve is still trending down (1.37x at 5000).
+- Learnable per-group scales are a marginal gain (within run noise).
+- The mirror map is still falsified, now in the rotated basis too.
+- `selected.txt` scored worse; it was built by entropy/excess-loss selection
+  ([F8](FAILURES.md#f8--entropyexcess-loss-data-selection-lost-to-random)), a
+  harder distribution, so it is not a clean data-scale test.
+
 ## Runtime note: what actually sets the pace
 
 CORRECTION: the cards run at the same pace. A same-config 200-step tern probe
@@ -209,20 +233,18 @@ projection is now an explicit, legitimate variant.
 
 All candidates are judged in the STE/deployed metric (`--ste`). The clean
 multi-region baseline is **2.09x mean** (~48%); the current best is
-**rotation + STE at 1.3683x mean / 73.1%**. The 1.103x and single-region 1.219x
-are retracted.
+**rotation + STE at 10000 steps, 1.2152x mean / 82.3%**. The 1.103x and
+single-region 1.219x are retracted.
 
-1. DONE: rotation + STE = **1.3683x mean** (8 regions, 5000 steps, 73.1%),
-   clears the 1.44x gate on the mean. Plain STE control = 2.09x mean.
-2. **Learnable per-group scales** (LSQ-style) on top of rotation + STE; the
-   scale is currently fixed to the group absmean.
-3. Rotation + STE at longer horizon / more data (wikitext pool); everything so
-   far is 301k tokens of TinyShakespeare.
-4. Rotation + `--update md` / low-lam tern potential (the regularizers that
-   failed unrotated may behave differently in the rotated basis).
-5. `--gate 0.2` + tern attractor inside STE (encodes the Gate-1 20/80
-   structure).
-6. Replicate rotation + STE across 2-3 seeds before any 27B work.
+1. DONE: rotation + STE replicated at 5000 steps (1.3683x / 1.4134x / 1.4015x,
+   ~72%); length reaches **1.2152x / 82.3% at 10000 steps**, still trending down.
+2. DONE: learnable per-group scales (LSQ) are marginal (1.3397x, within noise).
+3. DONE: mirror map falsified in the rotated basis too (8.5400x).
+4. DONE: `selected.txt` is worse (2.4515x); a neutral larger corpus is untested.
+5. NEXT: extend length (20000 steps) and length + LSQ; the curve has not
+   plateaued.
+6. Optional: `--gate 0.2`, low-lam tern potential, an LR schedule or decay.
+7. Replicate the best config across seeds before any 27B work.
 
 ## Papers
 
