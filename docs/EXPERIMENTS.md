@@ -6,10 +6,12 @@ Status of the recipe search for the last 8% (mission bar: projected ratio
 card, KD T=2, 585 train windows x 512, 4 eval windows x 512, teacher PPL 32.93).
 Ratio = model PPL / teacher PPL. The original baseline "T28 STE+KD 1.103x" is
 **retracted** (see "T28's 1.103x was not a clean holdout" below and F11): it was
-measured on training windows. The clean multi-region value is **2.09x mean**
-(~48% retention, range 1.55-2.71x) over 8 held-out regions; a single-region
-1.219x / 82% was also contaminated by a holdout/eval mismatch and is retracted
-too (rev 2026-09-22b).
+measured on training windows. The clean multi-region value for the plain STE
+control is **2.09x mean** (~48%, range 1.55-2.71x) over 8 held-out regions; a
+single-region 1.219x / 82% was also contaminated by a holdout/eval mismatch and
+is retracted too (rev 2026-09-22b). The corrected single-region T28 number is
+**1.746x / 57.3%**. Current best: **rotation + STE, 1.3683x mean / 73.1%**
+(clears the 1.44x gate on the mean).
 
 ## Hypothesis
 
@@ -99,8 +101,9 @@ so the excluded region (`[16384, 18432)`) was not the evaluated region
 still evaluated training data; its **1.219x / 82.0% is retracted**. The fix is
 now a single source of truth, `eval_holdout_windows(samples, eval_seq_len,
 eval_windows, train_seq_len)` in recover.py, and `train()` passes the same
-parameters to both `evaluate_perplexity` and `build_batches`. A corrected re-run
-(`artifacts/recover/holdout-v2`) is in flight.
+parameters to both `evaluate_perplexity` and `build_batches`. The corrected
+re-run (`artifacts/recover/holdout-v2`, same eval region now genuinely held out)
+gives student **68.138** vs teacher **38.966** = **1.746x / 57.3%**.
 
 ### The clean number: multi-region, ~2.1x
 
@@ -133,6 +136,24 @@ before training.
 Consequence: the mission bar `<= 1.031x` was set against 1.103x, which is
 optimistic; the honest 1.7B retention for the T28 recipe is ~48% (2.09x mean) on
 a clean multi-region holdout. The whitepaper and F11 are corrected.
+
+### Rotation + STE: the first real win (2026-09-22)
+
+Training quantization-aware in the spec-rotated basis (`--ste --rotate`,
+`RotatedLinear` ternarizes the rotated master) is the first lever that moves the
+clean number. Same protocol as the unrotated baseline (8 regions x 8 windows,
+5000 steps, batch 2):
+
+| run | mean | min | max | std | retention |
+|---|---|---|---|---|---|
+| STE control (unrotated) | 2.0855x | 1.546 | 2.711 | 0.340 | 48.0% |
+| **rotation + STE** | **1.3683x** | 1.172 | 1.651 | 0.133 | **73.1%** |
+
+A 1.52x improvement in the ratio, and the mean now clears the 1.44x gate (one
+region, r3 at 1.651x, does not). The init is also ~112x better: 5,827x rotated
+versus 655,974x unrotated. This matches the projection-metric finding that the
+rotated basis was the single largest effect, and the public reading that the
+rotation is part of the training pipeline, not only the container.
 
 ## Runtime note: what actually sets the pace
 
@@ -186,24 +207,22 @@ projection is now an explicit, legitimate variant.
 
 ## Current candidates, in order
 
-All candidates are judged in the STE/deployed metric (`--ste`). The honest
-anchor is the clean multi-region **2.09x mean** (~48% retention) over 8
-held-out regions; both the 1.103x and the single-region 1.219x are retracted.
+All candidates are judged in the STE/deployed metric (`--ste`). The clean
+multi-region baseline is **2.09x mean** (~48%); the current best is
+**rotation + STE at 1.3683x mean / 73.1%**. The 1.103x and single-region 1.219x
+are retracted.
 
-1. DONE: multi-region baseline = **2.09x mean** (8 regions, 5000 steps);
-   single-region runs ranged 1.55x-2.71x. A corrected T28-harness re-run is in
-   flight.
-2. `--reproject-every 500` explicit alternating projection, now inside the STE
-   loop (AP was only ever tested on FP masters).
-3. `--gate 0.2` + tern attractor inside STE (freeze the top 20% by |w|, train
-   the flexible 80%; encodes the Gate-1 20/80 structure).
-4. `--rotate` inside STE (train in the spec-rotated basis, PRF signs seed 1337:
-   q/k/v, gate/up absorb `W R^T`; o_proj/down absorb `R W`, bias' = R b).
-5. `--update md` (RMD mirror map, Algorithm 1 of arXiv:2202.10788) is
-   **FALSIFIED in-loop** at q16/shell 0.020: 23.01x vs the control's 2.93x at
-   3000 steps. Revisit only with a changed shell/q and a mechanism argument.
-6. If anything beats the anchor materially: replicate across 2-3 seeds before
-   any 27B work.
+1. DONE: rotation + STE = **1.3683x mean** (8 regions, 5000 steps, 73.1%),
+   clears the 1.44x gate on the mean. Plain STE control = 2.09x mean.
+2. **Learnable per-group scales** (LSQ-style) on top of rotation + STE; the
+   scale is currently fixed to the group absmean.
+3. Rotation + STE at longer horizon / more data (wikitext pool); everything so
+   far is 301k tokens of TinyShakespeare.
+4. Rotation + `--update md` / low-lam tern potential (the regularizers that
+   failed unrotated may behave differently in the rotated basis).
+5. `--gate 0.2` + tern attractor inside STE (encodes the Gate-1 20/80
+   structure).
+6. Replicate rotation + STE across 2-3 seeds before any 27B work.
 
 ## Papers
 
