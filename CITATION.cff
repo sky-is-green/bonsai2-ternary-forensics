@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this study, cite it as below."
+title: "Bonsai 2 27B Ternary Quantization Forensics"
+abstract: >-
+  Independent forensics of Bonsai 2 27B (Prism ML), a ~2 bpw ternary model
+  built from Qwen3.8-27B. Recovers the storage format and Walsh-Hadamard
+  rotation basis, localizes the quality gap to trained weight movement rather
+  than the quantizer, and shows that a widely cited public PTQ baseline is a
+  calibration-passage artifact. Redistributes no model weights.
+type: software
+authors:
+  - name: "sky-is-green"
+    alias: "sky-is-green"
+version: "0.1.0"
+date-released: "2026-09-22"
+license: Apache-2.0
+repository-code: "https://github.com/sky-is-green/bonsai2-ternary-forensics"
+url: "https://github.com/sky-is-green/bonsai2-ternary-forensics"
+keywords:
+  - quantization
+  - ternary
+  - gguf
+  - gptq
+  - forensics
+  - llm
