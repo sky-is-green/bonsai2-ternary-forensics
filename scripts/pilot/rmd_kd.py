@@ -62,7 +62,7 @@ from bonsai_forensics.evaluate import (  # noqa: E402
     region_windows,
     result_markdown,
 )
-from bonsai_forensics.recover import TARGET_SUFFIXES, TernaryLinear, wrap_ternary  # noqa: E402
+from bonsai_forensics.recover import TARGET_SUFFIXES, TernaryLinear, ternary_ste, wrap_ternary  # noqa: E402
 from bonsai_forensics.rotation import absorb_input, absorb_output, hadamard, rotations_for  # noqa: E402
 
 
@@ -185,17 +185,22 @@ class RotatedLinear(torch.nn.Linear):
     y = R^T (R W z + R b) = W z + b. The stored weights are the ones the 27B
     quantizes."""
 
-    def __init__(self, base: torch.nn.Linear, rot_in: torch.Tensor | None, rot_out: torch.Tensor | None) -> None:
+    def __init__(self, base: torch.nn.Linear, rot_in: torch.Tensor | None,
+                 rot_out: torch.Tensor | None, ste: bool = False) -> None:
         super().__init__(base.in_features, base.out_features, bias=base.bias is not None)
         self.weight = torch.nn.Parameter(base.weight.detach().clone())
         self.bias = base.bias
         self.rot_in = rot_in
         self.rot_out = rot_out
+        self.ste = ste
 
     def forward(self, x):
         if self.rot_in is not None:
             x = F.linear(x, self.rot_in)
-        y = F.linear(x, self.weight, self.bias)
+        # With `ste`, ternarize the (rotated) master in the forward, so training
+        # is quantization-aware in the same basis the 27B stores.
+        weight = ternary_ste(self.weight) if self.ste else self.weight
+        y = F.linear(x, weight, self.bias)
         if self.rot_out is not None:
             y = F.linear(y, self.rot_out)
         return y
@@ -212,11 +217,12 @@ def _rot_tensor(width: int, seed: int, dtype=torch.float32, device="cuda:0") -> 
     return torch.from_numpy(out.astype(np.float32)).to(device=device, dtype=dtype)
 
 
-def wrap_rotated(model: torch.nn.Module, seed: int) -> list[torch.nn.Module]:
+def wrap_rotated(model: torch.nn.Module, seed: int, ste: bool = False) -> list[torch.nn.Module]:
     """Absorb the spec rotation into every target linear (spec table 1.3:
     q/k/v, gate/up consume a rotated input (W R^T); o_proj/down emit a rotated
     output (R W, bias' = R b)) and keep the function exact via RotatedLinear
-    wrappers. Returns the wrapped target modules with requires_grad set."""
+    wrappers. With `ste`, the forward ternarizes the rotated master (rotation +
+    quantization-aware training). Returns the wrapped modules with grad set."""
     wrapped = []
     for name, module in list(model.named_modules()):
         if not (isinstance(module, torch.nn.Linear) and name.endswith(TARGET_SUFFIXES)):
@@ -226,14 +232,14 @@ def wrap_rotated(model: torch.nn.Module, seed: int) -> list[torch.nn.Module]:
         if name.endswith(("o_proj", "down_proj")):
             rots = rotations_for(module.out_features, seed, "hidden")
             w_abs = absorb_output(module.weight.detach().cpu().float().numpy(), rots)
-            repl = RotatedLinear(module, None, _rot_tensor(module.out_features, seed, module.weight.dtype, module.weight.device).transpose(-1, -2))
+            repl = RotatedLinear(module, None, _rot_tensor(module.out_features, seed, module.weight.dtype, module.weight.device).transpose(-1, -2), ste=ste)
             if module.bias is not None:
                 r = _rot_tensor(module.out_features, seed, torch.float32, module.weight.device)
                 repl.bias.data = (r @ module.bias.detach().cpu().float()).to(module.bias.dtype)
         else:
             rots = rotations_for(module.in_features, seed, "hidden")
             w_abs = absorb_input(module.weight.detach().cpu().float().numpy(), rots)
-            repl = RotatedLinear(module, _rot_tensor(module.in_features, seed, module.weight.dtype, module.weight.device), None)
+            repl = RotatedLinear(module, _rot_tensor(module.in_features, seed, module.weight.dtype, module.weight.device), None, ste=ste)
         repl.weight.data = torch.from_numpy(w_abs.astype(np.float32)).to(
             device=module.weight.device, dtype=module.weight.dtype)
         repl.weight.requires_grad_(True)
@@ -292,18 +298,17 @@ def run(args) -> dict:
 
     student = AutoModelForCausalLM.from_pretrained(args.model_dir, dtype=torch.bfloat16).to(device)
     student.gradient_checkpointing_enable()
-    if args.ste:
-        if args.rotate:
-            raise SystemExit("--ste and --rotate are not combined in this harness (T28 is unrotated)")
+    if args.rotate:
+        linears = wrap_rotated(student, args.seed, ste=args.ste)
+        mode = "rotated + STE ternary" if args.ste else "rotated (FP forward)"
+        print(f"[rmd] {mode} on {len(linears)} target linears", flush=True)
+    elif args.ste:
         wrap_ternary(student)
         linears = [m for m in student.modules() if isinstance(m, TernaryLinear)]
         print(f"[rmd] STE ternary forward on {len(linears)} target linears "
-              f"(deployed-model ratio, comparable to T28 1.103x)", flush=True)
+              f"(deployed-model ratio)", flush=True)
     else:
         linears = target_linears(student)
-        if args.rotate:
-            linears = wrap_rotated(student, args.seed)
-            print(f"[rmd] rotated {len(linears)} target linears into the spec basis", flush=True)
     masks = magnitude_masks(linears, args.gate)
     for p in student.parameters():
         p.requires_grad_(False)
