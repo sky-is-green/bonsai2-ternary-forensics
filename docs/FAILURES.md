@@ -38,7 +38,7 @@ items — operational incidents and a latent bug that do not bear on the finding
 | [F8](#f8--entropyexcess-loss-data-selection-lost-to-random) | (a)/(b) | Entropy/excess-loss selection lost to random: 172.3 vs 115.9 PPL | Falsified (pilot) | closed | Yes — larger pool/seeds |
 | [F9](#f9--27b-full-model-cpu-offload-swap-thrashes) | (b)/(c) | 27B full-model offload swap-thrashes (55.6 GB vs 40 GB VRAM + ~20 GB RAM) | Mitigated | resolved | No |
 | [F10](#f10---ngl-99-allocation-failure-on-one-20-gb-card) | (c) | `-ngl 99` on one 20 GB card fails to allocate; fixed by auto-fit | Resolved | resolved | No |
-| [F11](#f11--t28-holdout-leak-evaluation-on-training-windows) | (a) | T28's 1.103× was measured on its own training windows; clean holdout is ~2.0× | Retracted | open | Yes — re-baseline |
+| [F11](#f11--t28-holdout-leak-evaluation-on-training-windows) | (a) | T28's 1.103× was measured on its own training windows; clean holdout on the same region is 1.219× (82.0%) | Retracted | open | Yes — re-baseline |
 | [U1](#u1--internal-tooling-drift-blocked-harness-imports) | (c)/(d) | Internal tooling drift blocked harness imports; pinned dependency workaround is interim | Mitigated | resolved (fix pending) | Yes — T23 |
 | [U2](#u2--two-rocm-contexts-hang-gpu1-at-firmware-level) | (c)/(d) | Two ROCm contexts hang GPU1 at firmware level | Mitigated | resolved (policy) | If driver changes |
 | [U3](#u3--oracledecode_q2_0_g64-decodes-garbage) | (d) | `oracle.decode_q2_0_g64` (type 42) decodes garbage | Open | open | Yes — cheap fix |
@@ -208,7 +208,8 @@ a latent bug); they are recorded for completeness only.
   (student 42.988 vs teacher 38.966 = 1.103×) was measured on windows that were
   part of the training pool: `build_batches` had no holdout and
   `evaluate_perplexity` read `[samples, samples + eval_windows)` windows. A
-  clean-holdout re-run of the same recipe gives ~2.0× at 7000 steps. See
+  clean-holdout re-run of the same recipe on the same eval region gives
+  1.219× / 82.0% (5000 steps). See
   [F11](#f11--t28-holdout-leak-evaluation-on-training-windows). The mission-level
   shortfall is therefore larger than 90.6% implies; the scope decision above
   (do not fund the 27B proof-run) is unchanged.
@@ -326,21 +327,31 @@ a latent bug); they are recorded for completeness only.
   `16384`, i.e. tokens `[16384, 18432)` (recover.py:166-175) — inside that same
   pool. Over 5000 steps at batch 2, each eval window was sampled ~17 times. The
   same recipe (STE g128 + KD T=2 + Adafactor, batch 2, seq 512, lr 5e-5) was
-  re-run in a harness that holds the last 4 windows out entirely
-  (`scripts/pilot/rmd_kd.py --ste`, `train = ids[:-4]`, `eval = ids[-4:]`).
-- **Outcome:** The published 1.103× is a **train-set (memorized) figure**. Clean
-  holdout of the same recipe: 5000 steps = **2.22×**, 7000 steps = **2.01×**.
+  re-run two ways: with the fix in `recover.py` itself (same eval region, now
+  held out), and in `scripts/pilot/rmd_kd.py --ste` whose holdout is the last 4
+  windows (`train = ids[:-4]`, `eval = ids[-4:]`).
+- **Outcome:** The published 1.103× is a **train-set (memorized) figure**.
+  Re-running T28's exact config with the holdout fix
+  (`artifacts/recover/holdout-baseline/recover-report.json`, 5000 steps, seq 512,
+  batch 2, student cuda:1, teacher cuda:0) gives student **47.512** vs teacher
+  **38.966** = **1.219× (82.0% retention)**, against the reported 1.103× /
+  90.6%. The leak inflated the ratio by ~11%.
+  Separately, the `rmd_kd.py` harness on its own corpus-tail holdout
+  (`eval = ids[-4:]`) plateaus at 2.01×, so retention is region-dependent and the
+  region must be stated with any number.
   A region diagnostic (`/tmp/opencode/diag_regions.py`) shows absmean-STE
   quantization of the base is catastrophic on both T28's region (145,702×) and
   the rmd region (135,953×), confirming the harness is not miscalculating; the
   base quant is genuinely that bad before training.
 - **Verdict:** **Reported result retracted.** The 90.6% retention figure does
-  not survive a clean holdout; the mission-level shortfall is larger than
-  stated. The scope decision in F5 is unchanged.
+  not survive a clean holdout; the honest number on the same region is 82.0%.
+  The scope decision in F5 is unchanged.
 - **Evidence:** private record
   `hivebench/artifacts/ternary/recover/run1/recover-report-s5000.json`
   (config `samples 32, seq_len 512, batch 2, steps 5000`; student 42.988 vs
-  teacher 38.966); [`docs/EXPERIMENTS.md`](EXPERIMENTS.md) STE section
+  teacher 38.966); corrected run
+  `artifacts/recover/holdout-baseline/recover-report.json` (student 47.512 /
+  teacher 38.966); [`docs/EXPERIMENTS.md`](EXPERIMENTS.md) holdout section
   (2026-09-22); `artifacts/rmd/ste-control-7k/rmd-report.json`.
 - **Status:** open (correction propagated to
   [`docs/WHITEPAPER.md`](WHITEPAPER.md) sections 3, 4, 5 and 7; F5 rev note).

@@ -6,8 +6,9 @@ Status of the recipe search for the last 8% (mission bar: projected ratio
 card, KD T=2, 585 train windows x 512, 4 eval windows x 512, teacher PPL 32.93).
 Ratio = model PPL / teacher PPL. The original baseline "T28 STE+KD 1.103x" is
 **retracted** (see "T28's 1.103x is not a clean holdout" below and F11): it was
-measured on training windows, and the clean-holdout value for that recipe is
-**~2.0x**.
+measured on training windows. The corrected clean-holdout value is **1.219x**
+(82.0% retention) on T28's own eval region, and 2.01x on the rmd harness's
+corpus-tail holdout.
 
 ## Hypothesis
 
@@ -83,40 +84,51 @@ Reading:
 
 ## T28's 1.103x is not a clean holdout (2026-09-22)
 
-The 7000-step STE runs (anchor and `--gate 0.2`) plateaued near 2.0x, not
-1.103x. The gap is a measurement artifact in the T28 harness, not a training
-regression.
+`bonsai_forensics/recover.py::build_batches` sampled windows from
+`ids[:usable]` with **no holdout** (recover.py:138-142), so every window was in
+the training pool. `evaluate_perplexity` evaluates at
+`start = samples * seq_len` = 32 * 512 = 16384, i.e. tokens `[16384, 18432)`
+(recover.py:166-175), which lies inside that pool: over 5000 steps at batch 2
+each eval window was sampled ~17 times. T28's reported `heldout_ppl_student`
+42.988 / teacher 38.966 = 1.103x is therefore a train-set evaluation.
 
-- `bonsai_forensics/recover.py::build_batches` samples windows from
-  `ids[:usable]` with **no holdout** (recover.py:138-142), so every window is in
-  the training pool.
-- `evaluate_perplexity` evaluates at `start = samples * seq_len` = 32 * 512 =
-  16384, i.e. tokens `[16384, 18432)` (recover.py:166-175), which lies inside
-  that pool. Over 5000 steps at batch 2 each eval window was sampled ~17 times.
-- T28's `heldout_ppl_student` 42.988 / teacher 38.966 = 1.103x (private record,
-  `hivebench/artifacts/ternary/recover/run1/recover-report-s5000.json`, config
-  `seq_len 512, samples 32, batch 2, steps 5000`) is therefore a train-set
-  evaluation.
+The fix (`build_batches(..., holdout_windows=...)`) excludes that region.
+Re-running T28's exact config with the fix
+(`artifacts/recover/holdout-baseline/recover-report.json`, 5000 steps, seq 512,
+batch 2, student cuda:1, teacher cuda:0):
 
-`rmd_kd.py` holds the last 4 windows out entirely (`train = ids[:-4]`,
-`eval = ids[-4:]`), so its numbers are clean. Clean 7000-step anchor: **2.0097x**.
+| run | student PPL | teacher PPL | ratio | retention |
+|---|---|---|---|---|
+| T28 as reported (leaked) | 42.988 | 38.966 | 1.103x | 90.6% |
+| T28 corrected (clean holdout) | 47.512 | 38.966 | **1.219x** | **82.0%** |
 
-| run (7000 steps, clean holdout) | 500 | 1000 | 2000 | 3000 | 5000 | 6000 | 7000 |
+The leak inflated the result from 1.219x to 1.103x on T28's own eval region. The
+retraction stands; the corrected magnitude is ~1.22x.
+
+### Eval region matters: the corpus tail is harder
+
+The `rmd_kd.py` harness holds out the last 4 windows (`train = ids[:-4]`,
+`eval = ids[-4:]`), a different region. Its clean 7000-step run of the same
+recipe plateaus at **2.01x**, versus 1.219x for the corrected T28 run at 5000
+steps on region `[32, 36)`. Both are clean holdouts; the difference is the eval
+region. State the region with any retention number.
+
+| run (clean holdout, 7000 steps for rmd) | 500 | 1000 | 2000 | 3000 | 5000 | 6000 | 7000 |
 |---|---|---|---|---|---|---|---|
-| STE control (T28 recipe) | 16.23x | 14.62x | 4.94x | 2.93x | 2.22x | 2.14x | **2.01x** |
-| STE + `--gate 0.2` | 29.17x | 35.29x | 10.58x | 5.27x | 2.70x | 2.91x | **2.42x** |
+| STE control, rmd tail region | 16.23x | 14.62x | 4.94x | 2.93x | 2.22x | 2.14x | **2.01x** |
+| STE + `--gate 0.2`, rmd tail region | 29.17x | 35.29x | 10.58x | 5.27x | 2.70x | 2.91x | **2.42x** |
+| T28 corrected, region `[32,36)`, 5000 steps | - | - | - | - | **1.219x** | - | - |
 
 A region diagnostic (`/tmp/opencode/diag_regions.py`) confirms the harness is not
 miscalculating: on both T28's region (tokens 16384:18432, FP PPL 66.0) and the
 rmd region (last 2048, FP PPL 35.6), absmean-STE quantization of the base model
 is catastrophic at init (145,702x and 135,953x respectively), matching the
-harness's ~656,000x init to within the expected numeric spread at those
-magnitudes.
+harness's ~656,000x init in order of magnitude.
 
 Consequence: the mission bar `<= 1.031x` was set against 1.103x, which is
-optimistic. The honest 1.7B retention for the T28 recipe is ~2.0x on unseen
-tokens. This needs to be re-baselined before any variant is judged, and the
-whitepaper's 1.103x figure (docs/WHITEPAPER.md sections 5-6) is affected.
+optimistic. The clean number on T28's own region is **1.219x (82.0% retention)**;
+on the corpus tail it is 2.01x. The whitepaper's 1.103x figure (sections 3-5, 7)
+is affected and has been corrected.
 
 ## Runtime note: what actually sets the pace
 
@@ -171,11 +183,11 @@ projection is now an explicit, legitimate variant.
 ## Current candidates, in order
 
 All candidates are judged in the STE/deployed metric (`--ste`). The honest
-anchor is the clean-holdout **~2.0x** plateau; the retracted 1.103x is not a
-valid target.
+anchor is the corrected clean-holdout **1.219x** on T28's region `[32,36)`
+(2.01x on the rmd tail); the retracted 1.103x is not a valid target.
 
-1. DONE: plain STE+KD at 7000 steps reached **2.01x** (clean holdout). This is
-   the standing anchor.
+1. DONE: corrected T28 baseline = **1.219x** (5000 steps, region `[32,36)`);
+   plain STE+KD at 7000 steps = 2.01x on the harder tail region. Both clean.
 2. `--reproject-every 500` explicit alternating projection, now inside the STE
    loop (AP was only ever tested on FP masters).
 3. `--gate 0.2` + tern attractor inside STE (freeze the top 20% by |w|, train
@@ -185,8 +197,8 @@ valid target.
 5. `--update md` (RMD mirror map, Algorithm 1 of arXiv:2202.10788) is
    **FALSIFIED in-loop** at q16/shell 0.020: 23.01x vs the control's 2.93x at
    3000 steps. Revisit only with a changed shell/q and a mechanism argument.
-6. If anything beats the 2.0x anchor materially: replicate across 2-3 seeds
-   before any 27B work.
+6. If anything beats the anchor materially: replicate across 2-3 seeds before
+   any 27B work.
 
 ## Papers
 
