@@ -126,6 +126,14 @@ def test_build_batches_never_samples_the_holdout() -> None:
         assert not ((batch >= 50) & (batch < 80)).any()
 
 
+def test_eval_holdout_windows_matches_the_eval_region() -> None:
+    # T28 params: eval seq 2048, samples 32 -> tokens [65536, 73728) = windows
+    # [128, 144) of 512. This is the range that must be held out.
+    assert recover.eval_holdout_windows(32, 2048, 4, 512) == (128, 144)
+    # When eval and training share a seq_len, the range is [samples, samples + eval_windows).
+    assert recover.eval_holdout_windows(32, 512, 4, 512) == (32, 36)
+
+
 def test_build_batches_holdout_covers_every_window() -> None:
     ids = np.arange(100)
     with pytest.raises(ValueError, match="every training window"):

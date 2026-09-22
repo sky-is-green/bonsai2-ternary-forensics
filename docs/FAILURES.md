@@ -38,7 +38,7 @@ items — operational incidents and a latent bug that do not bear on the finding
 | [F8](#f8--entropyexcess-loss-data-selection-lost-to-random) | (a)/(b) | Entropy/excess-loss selection lost to random: 172.3 vs 115.9 PPL | Falsified (pilot) | closed | Yes — larger pool/seeds |
 | [F9](#f9--27b-full-model-cpu-offload-swap-thrashes) | (b)/(c) | 27B full-model offload swap-thrashes (55.6 GB vs 40 GB VRAM + ~20 GB RAM) | Mitigated | resolved | No |
 | [F10](#f10---ngl-99-allocation-failure-on-one-20-gb-card) | (c) | `-ngl 99` on one 20 GB card fails to allocate; fixed by auto-fit | Resolved | resolved | No |
-| [F11](#f11--t28-holdout-leak-evaluation-on-training-windows) | (a) | T28's 1.103× was measured on its own training windows; clean holdout on the same region is 1.219× (82.0%) | Retracted | open | Yes — re-baseline |
+| [F11](#f11--t28-holdout-leak-evaluation-on-training-windows) | (a) | T28's 1.103× was measured on training windows; clean multi-region holdout is ~2.09× (~48%, range 1.55-2.71×) | Retracted | open | Yes — re-baseline |
 | [U1](#u1--internal-tooling-drift-blocked-harness-imports) | (c)/(d) | Internal tooling drift blocked harness imports; pinned dependency workaround is interim | Mitigated | resolved (fix pending) | Yes — T23 |
 | [U2](#u2--two-rocm-contexts-hang-gpu1-at-firmware-level) | (c)/(d) | Two ROCm contexts hang GPU1 at firmware level | Mitigated | resolved (policy) | If driver changes |
 | [U3](#u3--oracledecode_q2_0_g64-decodes-garbage) | (d) | `oracle.decode_q2_0_g64` (type 42) decodes garbage | Open | open | Yes — cheap fix |
@@ -208,8 +208,8 @@ a latent bug); they are recorded for completeness only.
   (student 42.988 vs teacher 38.966 = 1.103×) was measured on windows that were
   part of the training pool: `build_batches` had no holdout and
   `evaluate_perplexity` read `[samples, samples + eval_windows)` windows. A
-  clean-holdout re-run of the same recipe on the same eval region gives
-  1.219× / 82.0% (5000 steps). See
+  clean multi-region holdout gives ~2.09× mean, ~48% retention (8 regions,
+  5000 steps). See
   [F11](#f11--t28-holdout-leak-evaluation-on-training-windows). The mission-level
   shortfall is therefore larger than 90.6% implies; the scope decision above
   (do not fund the 27B proof-run) is unchanged.
@@ -321,38 +321,39 @@ a latent bug); they are recorded for completeness only.
 - **Claim/hypothesis (as published):** The T28 1.7B STE+KD run reached a
   held-out **1.103× / 90.6% retention** ([F5](#f5--the-last-8-was-localized-to-end-to-end-qat-and-deliberately-not-funded)).
 - **Method:** Re-inspection of [`bonsai_forensics/recover.py`](../bonsai_forensics/recover.py)
-  plus a clean-holdout re-run. `build_batches` sampled windows from
-  `ids[:usable]` with **no exclusion** (recover.py:138-142), while
-  `evaluate_perplexity` evaluated at `start = samples * seq_len` = `32 * 512` =
-  `16384`, i.e. tokens `[16384, 18432)` (recover.py:166-175) — inside that same
-  pool. Over 5000 steps at batch 2, each eval window was sampled ~17 times. The
-  same recipe (STE g128 + KD T=2 + Adafactor, batch 2, seq 512, lr 5e-5) was
-  re-run two ways: with the fix in `recover.py` itself (same eval region, now
-  held out), and in `scripts/pilot/rmd_kd.py --ste` whose holdout is the last 4
-  windows (`train = ids[:-4]`, `eval = ids[-4:]`).
+  plus clean-holdout re-runs. `build_batches` sampled windows from
+  `ids[:usable]` with **no exclusion**, while `evaluate_perplexity` read a fixed
+  token region, and with the T28 config that region was inside the sampling
+  pool. Over 5000 steps at batch 2, each eval window was sampled ~17 times.
 - **Outcome:** The published 1.103× is a **train-set (memorized) figure**.
-  Re-running T28's exact config with the holdout fix
-  (`artifacts/recover/holdout-baseline/recover-report.json`, 5000 steps, seq 512,
-  batch 2, student cuda:1, teacher cuda:0) gives student **47.512** vs teacher
-  **38.966** = **1.219× (82.0% retention)**, against the reported 1.103× /
-  90.6%. The leak inflated the ratio by ~11%.
-  Separately, the `rmd_kd.py` harness on its own corpus-tail holdout
-  (`eval = ids[-4:]`) plateaus at 2.01×, so retention is region-dependent and the
-  region must be stated with any number.
+  The first fix was also wrong: the eval call passed a hardcoded `seq_len=2048`
+  while the holdout assumed `seq_len=512`, so the excluded region
+  (`[16384, 18432)`) was not the evaluated region (`[65536, 73728)`). That run's
+  **1.219× / 82.0% is retracted** as well.
+  The clean measurement is the `rmd_kd.py` multi-region run
+  (`artifacts/rmd/ste-regions-8x8`): 8 disjoint regions spread across the
+  corpus, all excluded from training, 8 windows each (32k held-out tokens), 5000
+  steps. Mean ratio **2.0855×** (min 1.546, max 2.711, std 0.34), i.e. ~48%
+  retention, range ~37-65%. It does **not** clear the 1.44× gate on this
+  evaluation. A corrected T28-harness re-run with a single source of truth for
+  the holdout (`eval_holdout_windows`) is in flight
+  (`artifacts/recover/holdout-v2`).
   A region diagnostic (`/tmp/opencode/diag_regions.py`) shows absmean-STE
-  quantization of the base is catastrophic on both T28's region (145,702×) and
-  the rmd region (135,953×), confirming the harness is not miscalculating; the
-  base quant is genuinely that bad before training.
-- **Verdict:** **Reported result retracted.** The 90.6% retention figure does
-  not survive a clean holdout; the honest number on the same region is 82.0%.
-  The scope decision in F5 is unchanged.
+  quantization of the base is catastrophic at init (~1.4e5× on the regions
+  tested), confirming the harness is not miscalculating.
+- **Verdict:** **Reported result retracted twice.** Neither 90.6% nor 82.0%
+  survives; the clean multi-region number is ~48% retention (2.09× mean). The
+  scope decision in F5 is unchanged.
 - **Evidence:** private record
   `hivebench/artifacts/ternary/recover/run1/recover-report-s5000.json`
   (config `samples 32, seq_len 512, batch 2, steps 5000`; student 42.988 vs
-  teacher 38.966); corrected run
-  `artifacts/recover/holdout-baseline/recover-report.json` (student 47.512 /
-  teacher 38.966); [`docs/EXPERIMENTS.md`](EXPERIMENTS.md) holdout section
-  (2026-09-22); `artifacts/rmd/ste-control-7k/rmd-report.json`.
+  teacher 38.966); contaminated first fix
+  `artifacts/recover/holdout-baseline/recover-report.json` (retracted, leak 2);
+  clean multi-region `artifacts/rmd/ste-regions-8x8/eval-regions.json`;
+  corrected re-run pending at `artifacts/recover/holdout-v2`.
+- **[rev 2026-09-22b]** The initial F11 correction removed the wrong window
+  range (see Outcome). Kept as appended history rather than a rewrite: 1.103×
+  was leak 1, 1.219× was leak 2, ~2.09× is the clean number.
 - **Status:** open (correction propagated to
   [`docs/WHITEPAPER.md`](WHITEPAPER.md) sections 3, 4, 5 and 7; F5 rev note).
 - **What it rules out:** citing 1.103× / 90.6% as a held-out result, and the

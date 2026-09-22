@@ -68,8 +68,8 @@ Two tracks were considered:
   the quantizer reverse-engineering track is closed ([F2](FAILURES.md#f2--gptqhessian-variants-move-codes-away-from-prisms), [F3](FAILURES.md#f3--stochastic-calibration-resonance-falsified)), local
   rotate+absmean RTN of the base collapses to 23,606 PPL vs their 18.5851
   (1,270×; [F4](FAILURES.md#f4--no-rental-rotateabsmean-rtn-parity-is-dead)), and the 1.7B QAT/KD proof, first reported at 1.103× / 90.6%,
-  is corrected to 1.219× / 82.0% on a clean holdout ([F11](FAILURES.md#f11--t28-holdout-leak-evaluation-on-training-windows)): the original figure was
-  measured on training windows. Both are short of the ≥97% mission target, and the run is corpus-limited ([F5](FAILURES.md#f5--the-last-8-was-localized-to-end-to-end-qat-and-deliberately-not-funded)).
+  is corrected to ~2.09× mean / ~48% retention on a clean multi-region holdout ([F11](FAILURES.md#f11--t28-holdout-leak-evaluation-on-training-windows)): the original figure was
+  measured on training windows. It is short of the ≥97% mission target, and the run is corpus-limited ([F5](FAILURES.md#f5--the-last-8-was-localized-to-end-to-end-qat-and-deliberately-not-funded)).
 - **Track B — run Prism's released `PQ2_0` on the Prism ROCm fork and evaluate
   it with our harness.** This is the pragmatic end-state and the shipped result.
 
@@ -111,12 +111,13 @@ Full entries, evidence and revisit costs are in [`FAILURES.md`](FAILURES.md).
   eliminated ([F1–F4](FAILURES.md#summary), [F6](FAILURES.md#f6--student-stream-block-wise-kd-dead-end), [F7](FAILURES.md#f7--teacher-forced-block-wise-kd-dead-end)); the 27B proof-run was priced and
   **deliberately not funded** because the result is public and Track B ships it.
   The 1.7B run once cited here as **1.103× / 90.6%** is retracted: it was measured
-  on its own training windows, and a clean holdout gives 1.219× / 82.0% ([F11](FAILURES.md#f11--t28-holdout-leak-evaluation-on-training-windows)).
+  on its own training windows, and a clean multi-region holdout gives ~2.09× mean ([F11](FAILURES.md#f11--t28-holdout-leak-evaluation-on-training-windows)).
 - [**F11**](FAILURES.md#f11--t28-holdout-leak-evaluation-on-training-windows) T28's **1.103× / 90.6%** was measured on windows inside the
-  training pool (`build_batches` had no holdout); re-running the same config with
-  the region held out gives **1.219× / 82.0%**. Retracted; the 1.7B retention
-  must be re-baselined. The rmd harness's separate corpus-tail holdout gives
-  2.01×, so the figure is region-dependent.
+  training pool (`build_batches` had no holdout). A first correction (1.219× /
+  82.0%) removed the wrong window range and was also contaminated; it is
+  retracted too. The clean multi-region holdout (8 disjoint regions, 32k tokens)
+  gives **~2.09× mean, ~48% retention** (range 1.55-2.71×). The 1.7B retention
+  must be re-baselined.
 - [**F6**](FAILURES.md#f6--student-stream-block-wise-kd-dead-end) Student-stream block-wise KD = **1.25 M PPL**, worse than RTN
   (per-layer compounding).
 - [**F7**](FAILURES.md#f7--teacher-forced-block-wise-kd-dead-end) Teacher-forced block-wise KD = **1.06 M PPL**, still worse than RTN;
@@ -140,7 +141,7 @@ import workaround; [U2](FAILURES.md#u2--two-rocm-contexts-hang-gpu1-at-firmware-
 | **T30 / Gate 1** | Does rotate+RTN in Prism's basis reproduce their trits? | Basis **cracked**: 0.920 mean / 0.885 min agreement. Residual is *structural* (non-monotone within groups, denser codes, ~10% lower weight-space error than RTN) — fingerprinted as error-compensated or QAT weights. |
 | **T31 / Gate 2** | What does the residual cost? | A byte-controlled swap of all **402** `PQ2_0` payloads for rotate+absmean RTN of the public base collapses PPL **18.5851 → 23,606 (1,270×)**. Metadata/exemptions stay byte-identical; 402/402 post-patch SHA-256 verified. |
 | **T32 / Gate 3** | Quantizer trick or trained weights? | **Trained weights.** SCR +0.003 pp ([F3](FAILURES.md#f3--stochastic-calibration-resonance-falsified)); GPTQ/H-variants all move codes away (RTN 0.9145 vs 0.8086–0.8497, [F2](FAILURES.md#f2--gptqhessian-variants-move-codes-away-from-prisms)); their codes' activation-weighted error is 1.072× RTN's. The reverse-engineering track is closed. |
-| **T28** | Can local QAT/KD close the gap? | 1.7B QAT/KD: the reported **1.103× / 90.6%** was measured on training windows (no holdout in `build_batches`) and is **retracted** ([F11](FAILURES.md#f11--t28-holdout-leak-evaluation-on-training-windows)); a clean-holdout re-run of the same config gives **1.219× / 82.0%** on the same eval region (2.01× on the harness's harder corpus-tail holdout). The ~8% residual is still trained weights (Gates 2–3), so end-to-end QAT remains the route to Prism's exact acceptance, but the 1.7B pilot no longer evidences closeness to the bar. Known, priced, deliberately not run ([F5](FAILURES.md#f5--the-last-8-was-localized-to-end-to-end-qat-and-deliberately-not-funded)). |
+| **T28** | Can local QAT/KD close the gap? | 1.7B QAT/KD: the reported **1.103× / 90.6%** was measured on training windows (no holdout in `build_batches`) and is **retracted** ([F11](FAILURES.md#f11--t28-holdout-leak-evaluation-on-training-windows)); a clean multi-region holdout (8 disjoint regions, 32k tokens) gives **~2.09× mean, ~48% retention** (range 1.55-2.71×). The ~8% residual is still trained weights (Gates 2–3), so end-to-end QAT remains the route to Prism's exact acceptance, but the 1.7B pilot no longer evidences closeness to the bar. Known, priced, deliberately not run ([F5](FAILURES.md#f5--the-last-8-was-localized-to-end-to-end-qat-and-deliberately-not-funded)). |
 | **T29** | Ship the released model. | Served on the Prism fork, smoke **5/5**, harness evaluation below. |
 
 ---
@@ -209,7 +210,7 @@ context, while `FIFO` feeds a plain sliding window of the most recent tokens.
    pilot) and was not funded, because the result it would reproduce is already
    public and shipped via Track B. What is proven is *where* the gap is, not
    that the recipe reproduces Prism's numbers (F5). The 1.7B pilot's reported
-   1.103× is retracted: its clean-holdout value is 1.219× / 82.0%
+   1.103× is retracted: its clean multi-region value is ~2.09× / ~48%
    ([F11](FAILURES.md#f11--t28-holdout-leak-evaluation-on-training-windows)), so the localization stands while the distance to
    the bar is larger than first stated.
 3. **The rotation basis and format are fully mapped** and reusable ([F1–F4](FAILURES.md#summary) do

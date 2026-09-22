@@ -138,9 +138,9 @@ def build_batches(ids: np.ndarray, seq_len: int, batch_size: int, seed: int = 0,
     """Yield random `batch_size`-window batches from the corpus.
 
     `holdout_windows` excludes one or more `[start, stop)` ranges of window
-    indices from sampling. `train()` passes the range that
-    `evaluate_perplexity` reads (`[samples, samples + eval_windows)`) so the
-    evaluation region is never trained on.
+    indices from sampling. `train()` passes the range from
+    `eval_holdout_windows`, i.e. the exact token region `evaluate_perplexity`
+    reads, so the evaluation region is never trained on.
     """
     rng = np.random.default_rng(seed)
     usable = (ids.size // seq_len) * seq_len
@@ -178,13 +178,28 @@ def mixed_loss(student_logits, teacher_logits, target_ids, temperature: float,
     return (1.0 - ce_weight) * kd + ce_weight * ce
 
 
-def evaluate_perplexity(model, tokenizer, corpus: Path, samples: int, seq_len: int, eval_windows: int, device) -> float:
+def eval_holdout_windows(samples: int, eval_seq_len: int, eval_windows: int,
+                         train_seq_len: int) -> tuple[int, int]:
+    """Training-window range to exclude so the `evaluate_perplexity` region is
+    genuinely held out.
+
+    Single source of truth: `train()` passes the same parameters here and to
+    `evaluate_perplexity`, so the eval region and the holdout cannot drift
+    apart (they did once, when the eval seq_len was hardcoded to 2048 while the
+    holdout assumed the training seq_len).
+    """
+    start = samples * eval_seq_len
+    stop = start + eval_windows * eval_seq_len
+    return start // train_seq_len, math.ceil(stop / train_seq_len)
+
+
+def evaluate_perplexity(model, tokenizer, corpus: Path, start_token: int,
+                        seq_len: int, eval_windows: int, device) -> float:
     ids = tokenizer(corpus.read_text(encoding="utf-8"), return_tensors="np")["input_ids"].reshape(-1)
-    start = samples * seq_len
     model.eval()
     losses = []
     with torch.no_grad():
-        for window in ids[start : start + eval_windows * seq_len].reshape(eval_windows, seq_len):
+        for window in ids[start_token : start_token + eval_windows * seq_len].reshape(eval_windows, seq_len):
             batch = torch.tensor(window, dtype=torch.long, device=device).unsqueeze(0)
             losses.append(model(batch, labels=batch).loss.item())
     return float(math.exp(sum(losses) / len(losses)))
@@ -211,6 +226,7 @@ class TrainConfig:
     log_every: int = 25
     samples: int = 32
     eval_windows: int = 4
+    eval_seq_len: int = 2048   # eval window length; independent of training seq_len
     grad_checkpointing: bool = True
     resume: bool = False
 
@@ -240,12 +256,12 @@ def train(config: TrainConfig) -> dict:
     trainable = [p for p in student.parameters() if p.requires_grad]
     optimizer = Adafactor(trainable, lr=config.lr, scale_parameter=False, relative_step=False, warmup_init=False)
 
-    # Hold out exactly the region evaluate_perplexity reads
-    # ([samples, samples + eval_windows) windows) so the held-out PPL is honest.
-    batches = build_batches(
-        ids, config.seq_len, config.batch_size,
-        holdout_windows=((config.samples, config.samples + config.eval_windows),),
-    )
+    # Hold out exactly the token region evaluate_perplexity reads, converted to
+    # training-window units, so the held-out PPL is honest by construction.
+    eval_start = config.samples * config.eval_seq_len
+    holdout = (eval_holdout_windows(config.samples, config.eval_seq_len,
+                                    config.eval_windows, config.seq_len),)
+    batches = build_batches(ids, config.seq_len, config.batch_size, holdout_windows=holdout)
     history = []
     student.train()
     start_step = 0
@@ -258,10 +274,12 @@ def train(config: TrainConfig) -> dict:
         torch.cuda.empty_cache()
         print(f"[recover] resumed from step {start_step}", flush=True)
     initial_ppl = evaluate_perplexity(
-        student, tokenizer, Path(config.corpus), config.samples, 2048, config.eval_windows, config.device
+        student, tokenizer, Path(config.corpus), eval_start,
+        config.eval_seq_len, config.eval_windows, config.device
     )
     teacher_ppl = evaluate_perplexity(
-        teacher, tokenizer, Path(config.corpus), config.samples, 2048, config.eval_windows, config.teacher_device
+        teacher, tokenizer, Path(config.corpus), eval_start,
+        config.eval_seq_len, config.eval_windows, config.teacher_device
     )
     print(f"[recover] step {start_step} heldout ppl student={initial_ppl:.1f} teacher={teacher_ppl:.1f}", flush=True)
     for step in range(start_step + 1, config.steps + 1):
@@ -306,7 +324,8 @@ def train(config: TrainConfig) -> dict:
         "heldout_ppl_initial": initial_ppl,
         "heldout_ppl_teacher": teacher_ppl,
         "heldout_ppl_student": evaluate_perplexity(
-            student, tokenizer, Path(config.corpus), config.samples, 2048, config.eval_windows, config.device
+            student, tokenizer, Path(config.corpus), eval_start,
+            config.eval_seq_len, config.eval_windows, config.device
         ),
     }
     (out_dir / "recover-report.json").write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")

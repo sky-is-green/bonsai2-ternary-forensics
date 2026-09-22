@@ -5,10 +5,11 @@ Status of the recipe search for the last 8% (mission bar: projected ratio
 `scripts/pilot/rmd_kd.py` on the Qwen3-1.7B canary (student and teacher on one
 card, KD T=2, 585 train windows x 512, 4 eval windows x 512, teacher PPL 32.93).
 Ratio = model PPL / teacher PPL. The original baseline "T28 STE+KD 1.103x" is
-**retracted** (see "T28's 1.103x is not a clean holdout" below and F11): it was
-measured on training windows. The corrected clean-holdout value is **1.219x**
-(82.0% retention) on T28's own eval region, and 2.01x on the rmd harness's
-corpus-tail holdout.
+**retracted** (see "T28's 1.103x was not a clean holdout" below and F11): it was
+measured on training windows. The clean multi-region value is **2.09x mean**
+(~48% retention, range 1.55-2.71x) over 8 held-out regions; a single-region
+1.219x / 82% was also contaminated by a holdout/eval mismatch and is retracted
+too (rev 2026-09-22b).
 
 ## Hypothesis
 
@@ -82,53 +83,56 @@ Reading:
 - The FP runs bottoming at ~28x are far above the STE control's 2.93x, which
   confirms those numbers were a different metric, not progress toward 1.031x.
 
-## T28's 1.103x is not a clean holdout (2026-09-22)
+## T28's 1.103x was not a clean holdout (2026-09-22, rev 2026-09-22b)
 
 `bonsai_forensics/recover.py::build_batches` sampled windows from
-`ids[:usable]` with **no holdout** (recover.py:138-142), so every window was in
-the training pool. `evaluate_perplexity` evaluates at
-`start = samples * seq_len` = 32 * 512 = 16384, i.e. tokens `[16384, 18432)`
-(recover.py:166-175), which lies inside that pool: over 5000 steps at batch 2
-each eval window was sampled ~17 times. T28's reported `heldout_ppl_student`
-42.988 / teacher 38.966 = 1.103x is therefore a train-set evaluation.
+`ids[:usable]` with **no holdout**, so every window was in the training pool.
+`evaluate_perplexity` read a fixed token region that, with the T28 config, lay
+inside that pool: over 5000 steps at batch 2 each eval window was sampled ~17
+times. T28's reported `heldout_ppl_student` 42.988 / teacher 38.966 = 1.103x is
+therefore a train-set evaluation.
 
-The fix (`build_batches(..., holdout_windows=...)`) excludes that region.
-Re-running T28's exact config with the fix
-(`artifacts/recover/holdout-baseline/recover-report.json`, 5000 steps, seq 512,
-batch 2, student cuda:1, teacher cuda:0):
+**The first fix was also wrong (rev 2026-09-22b).** The eval call passed a
+hardcoded `seq_len=2048` while the holdout assumed the training `seq_len=512`,
+so the excluded region (`[16384, 18432)`) was not the evaluated region
+(`[65536, 73728)`). The run at `artifacts/recover/holdout-baseline` therefore
+still evaluated training data; its **1.219x / 82.0% is retracted**. The fix is
+now a single source of truth, `eval_holdout_windows(samples, eval_seq_len,
+eval_windows, train_seq_len)` in recover.py, and `train()` passes the same
+parameters to both `evaluate_perplexity` and `build_batches`. A corrected re-run
+(`artifacts/recover/holdout-v2`) is in flight.
 
-| run | student PPL | teacher PPL | ratio | retention |
-|---|---|---|---|---|
-| T28 as reported (leaked) | 42.988 | 38.966 | 1.103x | 90.6% |
-| T28 corrected (clean holdout) | 47.512 | 38.966 | **1.219x** | **82.0%** |
+### The clean number: multi-region, ~2.1x
 
-The leak inflated the result from 1.219x to 1.103x on T28's own eval region. The
-retraction stands; the corrected magnitude is ~1.22x.
+The trustworthy measurement so far is the `rmd_kd.py` multi-region run
+(`artifacts/rmd/ste-regions-8x8`): 8 disjoint regions spread across the corpus,
+all excluded from training, 8 windows each (32k held-out tokens), 5000 steps.
 
-### Eval region matters: the corpus tail is harder
+| region | r0 | r1 | r2 | r3 | r4 | r5 | r6 | r7 |
+|---|---|---|---|---|---|---|---|---|
+| ratio | 1.546 | 1.810 | 2.195 | 2.711 | 1.931 | 1.969 | 2.099 | 2.423 |
 
-The `rmd_kd.py` harness holds out the last 4 windows (`train = ids[:-4]`,
-`eval = ids[-4:]`), a different region. Its clean 7000-step run of the same
-recipe plateaus at **2.01x**, versus 1.219x for the corrected T28 run at 5000
-steps on region `[32, 36)`. Both are clean holdouts; the difference is the eval
-region. State the region with any retention number.
+Mean **2.0855x** (min 1.546, max 2.711, std 0.34), i.e. ~48% retention on
+average, range ~37-65%. On this evaluation the recipe does not clear the 1.44x
+gate (only r0 is below it). The single-region 1.219x / 82% was the friendly end
+of a wide spread and is not the headline.
 
-| run (clean holdout, 7000 steps for rmd) | 500 | 1000 | 2000 | 3000 | 5000 | 6000 | 7000 |
-|---|---|---|---|---|---|---|---|
-| STE control, rmd tail region | 16.23x | 14.62x | 4.94x | 2.93x | 2.22x | 2.14x | **2.01x** |
-| STE + `--gate 0.2`, rmd tail region | 29.17x | 35.29x | 10.58x | 5.27x | 2.70x | 2.91x | **2.42x** |
-| T28 corrected, region `[32,36)`, 5000 steps | - | - | - | - | **1.219x** | - | - |
+Earlier single-region runs, for reference (each a different holdout):
+
+| run | region | ratio |
+|---|---|---|
+| STE control, 7000 steps | rmd tail (last 4 windows) | 2.01x |
+| STE + `--gate 0.2`, 7000 steps | rmd tail | 2.42x |
+| T28 (leaked, 5000 steps) | `[65536, 73728)` at seq 2048, not held out | 1.103x |
 
 A region diagnostic (`/tmp/opencode/diag_regions.py`) confirms the harness is not
-miscalculating: on both T28's region (tokens 16384:18432, FP PPL 66.0) and the
-rmd region (last 2048, FP PPL 35.6), absmean-STE quantization of the base model
-is catastrophic at init (145,702x and 135,953x respectively), matching the
-harness's ~656,000x init in order of magnitude.
+miscalculating: absmean-STE quantization of the base model is catastrophic at
+init (~1.4e5x on the regions tested), so the base quant is genuinely that bad
+before training.
 
 Consequence: the mission bar `<= 1.031x` was set against 1.103x, which is
-optimistic. The clean number on T28's own region is **1.219x (82.0% retention)**;
-on the corpus tail it is 2.01x. The whitepaper's 1.103x figure (sections 3-5, 7)
-is affected and has been corrected.
+optimistic; the honest 1.7B retention for the T28 recipe is ~48% (2.09x mean) on
+a clean multi-region holdout. The whitepaper and F11 are corrected.
 
 ## Runtime note: what actually sets the pace
 
@@ -183,11 +187,12 @@ projection is now an explicit, legitimate variant.
 ## Current candidates, in order
 
 All candidates are judged in the STE/deployed metric (`--ste`). The honest
-anchor is the corrected clean-holdout **1.219x** on T28's region `[32,36)`
-(2.01x on the rmd tail); the retracted 1.103x is not a valid target.
+anchor is the clean multi-region **2.09x mean** (~48% retention) over 8
+held-out regions; both the 1.103x and the single-region 1.219x are retracted.
 
-1. DONE: corrected T28 baseline = **1.219x** (5000 steps, region `[32,36)`);
-   plain STE+KD at 7000 steps = 2.01x on the harder tail region. Both clean.
+1. DONE: multi-region baseline = **2.09x mean** (8 regions, 5000 steps);
+   single-region runs ranged 1.55x-2.71x. A corrected T28-harness re-run is in
+   flight.
 2. `--reproject-every 500` explicit alternating projection, now inside the STE
    loop (AP was only ever tested on FP masters).
 3. `--gate 0.2` + tern attractor inside STE (freeze the top 20% by |w|, train
