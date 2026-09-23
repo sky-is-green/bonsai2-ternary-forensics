@@ -109,6 +109,46 @@ sparser older 1.7B predicts the retention gap (77.5% vs 85–88% at 1.7B). The
 **level** question needs the scale runs; the ledger and the structural table
 settle the *component* and *format* questions, not the quality one.
 
+## Public material (mined 2026-09-23)
+
+**The recipe is not public.** All four whitepapers (`bonsai-2-27b`,
+`bonsai-27b`, `ternary-bonsai-8b`, `1-bit-bonsai-8b`), the docs site
+(`docs.prismml.com`), and the `PrismML-Eng` repos disclose only the **storage
+format** (ternary g128 / `Q1_0`, group-wise FP16 scale), the **weight basis** for
+Bonsai 2 (blockwise Hadamard, block 1024, fixed ±1 signs), inference kernels, and
+benchmarks. The method is labelled *"proprietary Caltech intellectual property"*.
+An independent reproduction (ThakiCloud) reaches the same conclusion: *"It cannot
+be reproduced from public materials."*
+
+**What *is* public and useful:**
+
+- **Approach class** — *"starts from an off-the-shelf pretrained model and moves
+  it into a binary or ternary representation"*: not from-scratch (BitNet), not
+  *"bespoke calibration, auxiliary metadata, or custom runtimes."*
+- **The generations differ.** The older Ternary-Bonsai line (1.7B/4B/8B,
+  `Q2_0_g64`) uses **no rotation** — it runs on stock llama.cpp. Bonsai 2
+  (`PQ2_0`/`PTQ1_0`) **adds the Hadamard rotation** (needs the fork's FWHT). Our
+  forensics targets Bonsai 2.
+- **Independent reproduction** ([`ThakiCloud/bonsai-1bit-repro`](https://github.com/ThakiCloud/bonsai-1bit-repro)),
+  for the **older** line: fingerprint = *"~28% of signs flipped vs the base, group
+  scales ~2.26× the naive mean → the signature of error compensation (GPTQ/OBQ
+  family) on an unmodified base (consistent with 'no retraining')."* Public
+  frontier: GPTQ ~10× over naive → +salient ~3000× → **QuIP (rotation + error
+  comp) reaches 2.1× FP16 at pure 1.125 bpw**.
+
+**The fork this exposes.** Our Gate 1–3 concluded Bonsai 2's ~8% residual is
+**trained weights** (QAT/KD); ThakiCloud concludes the **older** line is
+**error-compensated PTQ, no retraining**. Different models (unrotated older vs
+rotated Bonsai 2), so both can hold — but it raises the live question: **is
+Bonsai 2 rotated-PTQ (QuIP-style error compensation) rather than QAT/KD?** If so,
+the lever is error compensation (a Hessian), not distillation, and our
+KD-centric recipe is aimed at the wrong target.
+
+**Cheap decisive test:** apply ThakiCloud's public `fingerprint` (sign-flip
+fraction + scale ratio vs the base) to **Bonsai 2's `PQ2_0`** and compare to
+their older-line numbers. Error-compensation signature → pivot; training
+signature → our path stands.
+
 ## Still unablated
 
 - **KD on/off** at convergence (the one lever with no off-switch data).
