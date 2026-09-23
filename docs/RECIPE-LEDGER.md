@@ -144,10 +144,28 @@ Bonsai 2 rotated-PTQ (QuIP-style error compensation) rather than QAT/KD?** If so
 the lever is error compensation (a Hessian), not distillation, and our
 KD-centric recipe is aimed at the wrong target.
 
-**Cheap decisive test:** apply ThakiCloud's public `fingerprint` (sign-flip
-fraction + scale ratio vs the base) to **Bonsai 2's `PQ2_0`** and compare to
-their older-line numbers. Error-compensation signature → pivot; training
-signature → our path stands.
+**Cheap decisive test — run 2026-09-23.** Applied ThakiCloud's fingerprint
+(sign-flip over non-zero codes + scale ratio vs the naive absmean) to the older
+ternary line, and compared to Bonsai 2:
+
+| model | sign-flip (non-zero) | scale ratio | basis |
+|---|---|---|---|
+| older `Ternary-Bonsai-1.7B` | **12.7%** | **1.96×** | unrotated (comparable) |
+| ThakiCloud older 1-bit | ~28% | ~2.26× | unrotated |
+| `Ternary-Bonsai-2-27B` | ~chance vs raw base → **rotated** | **≈1×** (via Gate 1) | rotated |
+
+The older line reproduces ThakiCloud's error-compensation signature (scales
+~2× naive) and is genuinely **unrotated**. Bonsai 2 is **rotated**, so signs
+aren't comparable to the raw base — but Gate 1's **92% absmean-RTN agreement on
+the rotated base** is only possible if Bonsai 2's scales are ≈ naive (a 2×
+inflation would drop the agreement far below 92%).
+
+**Resolution: different methods per generation.** Older line = error-compensated
+**PTQ** (unrotated); **Bonsai 2 = rotated, scales ≈ naive → not
+error-compensated** → its residual is training, matching our Gate 3. Our recipe
+(rotation + QAT/KD) targets Bonsai 2's actual method, and it already beats the
+public PTQ frontier (our 1.57× vs QuIP's 2.1× at 1.7B). The remaining gap is
+scale/data/compute or the undisclosed detail — the runs, not a public technique.
 
 ## Still unablated
 
