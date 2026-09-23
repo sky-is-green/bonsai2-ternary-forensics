@@ -86,6 +86,53 @@ Reading:
 - The FP runs bottoming at ~28x are far above the STE control's 2.93x, which
   confirms those numbers were a different metric, not progress toward 1.031x.
 
+## Why the RMD negative result is not a falsification of peak formation (2026-09-23)
+
+The mirror-map arm failed inside the ternary loop (23.01x vs the control's
+2.93x, worse at every checkpoint). That falsifies **the tested combination**,
+not mirror descent as a family. Two things make it a poor test of the
+"gradually form quantization peaks" intuition.
+
+**Coordinate representation.** The masters are absorbed into the rotated basis,
+and it is that parameter which is optimized and ternarized. Input-side linears
+store `W' = W Rᵀ` and the forward feeds `R x`; output-side linears store
+`W' = R W` (bias `R b`) and the forward applies `Rᵀ` after. In both cases the
+function is preserved exactly, and the mirror step acts directly on `W'`, the
+coordinates that get ternarized. Signs in these runs were the spec PRF signs,
+not Prism's explicit sign vectors.
+
+**A frame of mind.** It helps to picture the weights as balls on a landscape where height is `|w|`, and quantization decides which shelves a ball may rest on. Binary has two shelves at the same height, one above and one below; a force that pulls every ball to that single height is exactly right, and the sign decides the side. The mirror map is such a force. Ternary has three shelves, `-s`, `0`, `+s`; two sit at height `s` and one at height `0`, so a force that pulls every ball to one height deletes the ground floor and drags balls off the zero shelf. The question is therefore not whether the force is strong enough but whether the landscape has the right number of wells. The mirror map has one well; ternary needs two wells in magnitude, at `0` and at `s`. That is a shape mismatch, not a tuning problem.
+
+![One well vs two wells](figures/rmd-wells.png)
+
+*Schematic effective potential in magnitude. Left: the mirror map has a single well at `|w*|`. Right: ternary needs two wells, at `0` and `s`; a single-well force cannot populate the zero basin.*
+
+**Shape mismatch.** The mirror map forms a *shell*: a single equilibrium
+magnitude `|w*| = eta^(1/(q-1))`. That is a unimodal magnitude prior. Binary
+wants two peaks at one magnitude, so a shell is a faithful proxy there; ternary
+wants mass at `{0, +s, -s}`, which in magnitude is **bimodal**. A shell pulls
+every `|w|` toward one value and fights the zero state, so it never shaped the
+three-state structure. After the WHT the coordinates are near-Gaussian and the
+quantizer is per-group absmean, so a coordinate-wise magnitude prior also acts
+on a distribution that no longer carries the original weight structure.
+
+![Mirror map vs ternary](figures/rmd-shell-vs-ternary.png)
+
+*A: continuous masters in the original basis with the ternary grid. B: after WHT
+absorption, the parameter that is optimized and ternarized. C: the magnitude each
+method shapes. The map forms one shell; ternary needs mass at 0 and s.*
+
+**Metric caveat.** The early encouraging mirror-map numbers (32x to 113x, and a
+28x called best at the time) were in the FP-projection metric; the 23.01x
+falsification is in the deployed STE metric. They are different rulers, so the
+early promise and the later failure do not contradict each other. Some of those
+runs were also invalidated by the GPU1 driver wedge.
+
+**If revisited:** a mixture prior with mass at 0 and s, or forming peaks on the
+codes/scales rather than on continuous rotated masters. The dominant lever found
+so far is basis change plus QAT (rotation inside the loop), not a magnitude
+prior. Reference for the binary case: US patent application 20260220467.
+
 ## T28's 1.103x was not a clean holdout (2026-09-22, rev 2026-09-22b)
 
 `bonsai_forensics/recover.py::build_batches` sampled windows from
@@ -366,6 +413,80 @@ multi-region baseline is **2.09x mean** (~48%). The best *complete* run is
    try decay + LSQ at 20000, and decay on a neutral larger corpus.
 8. DONE (negative): reproject cadences are falsified; do not re-run them.
 9. Replicate the best config across seeds before any 27B work.
+
+## Retention is scale-dependent — the 97% bar is a 27B number (2026-09-23)
+
+Prism's own released tables show retention rising with scale:
+
+| model | retention vs FP base | source |
+|---|---|---|
+| Ternary Bonsai 1.7B | ~85–88% | ternary-8B whitepaper T7/T10 |
+| Ternary Bonsai 4B | ~92% | same |
+| Ternary Bonsai 8B | ~92–95% | same |
+| Bonsai 27B | 94.6% | bonsai-27B whitepaper |
+| Bonsai 2 27B | 98.2% | bonsai-2-27B whitepaper |
+
+The mission bar (≥97%) is the **27B** figure. At 1.7B, Prism itself retains
+~85–88%, and our canary's best point is ~90% (PPL ratio — a different ruler, so
+not a like-for-like "we beat Prism"). Consequence: **"our canary is short of 97%"
+is not a valid negative.** The canary's job is to show our recipe *scales* like
+Prism's; the decisive test is a size ladder (0.6B → 1.7B → 4B), not reaching 97%
+at 1.7B. Full table + figure: [`RETENTION-VS-SCALE.md`](RETENTION-VS-SCALE.md).
+
+## R4 — structure of Prism's trained ternary weights (2026-09-23)
+
+Unpacked both released artifacts and measured the deployed code distribution.
+Full tables, simulation and scripts:
+[`HADAMARD-VERIFICATION.md`](HADAMARD-VERIFICATION.md).
+
+| artifact | ternary params | zero_frac |
+|---|---|---|
+| Ternary-Bonsai-2-27B (`PQ2_0`, rotated) | 26.87B | **0.3276** |
+| Ternary-Bonsai-1.7B-unpacked (unrotated) | 1.72B | 0.383 |
+| our canary (rotated, STE) | — | 0.314 |
+
+- **The zero share is ~1/3 and uniform across tensor classes** — 0.3274–0.3280
+  across attention, MLP, linear-attn and the embedding, a spread of 0.0006.
+- **It has no free knob.** Under the absmean rule the share is predicted by the
+  weight distribution's shape alone: near-Gaussian → ~0.309, kurtosis ~4.5 →
+  ~0.328. The 27B sits on the heavy-tailed value; our canary on the Gaussian one.
+- **Reading:** sparsity is not a separately tuned target, and the cross-class
+  uniformity is what the block-Hadamard produces (every group becomes
+  near-Gaussian). This is *consistent with* the zero being the quantizer's band
+  rather than a formed attractor — not proof (a two-well potential could also
+  land at ~1/3), but it rules out needing a *tuned* sparsity target.
+- **Not a lever for us:** our recipe already lands at ~0.31, next to the 27B's
+  0.33, so the remaining gap is boundary *placement* (which weights land in the
+  zero band), not sparsity level.
+- **Correction:** the earlier "one magnitude per group" observation is automatic
+  for any ternary pack and is not evidence of anything; dropped.
+- **Caveat:** the public 1.7B is a *different base* (vocab 151669 vs Qwen3-1.7B's
+  151936) and predates the rotated basis, so it is a yardstick, not a reference;
+  the 27B is the comparable artifact.
+
+## LR screen — higher LR is worse without warmup (2026-09-23)
+
+The community `electroglyph/ternary_QAT` reports ternary QAT needs 10–50× higher
+LR (lowest usable ~7e-4); our recipe has always used 5e-5. Tested `2e-4` (4×) at
+5000 steps, seed 1337, identical recipe:
+
+| step | `lr=2e-4` | `lr=5e-5` baseline |
+|---|---|---|
+| 2500 | 4.87 | 1.50 |
+| 3500 | 3.22 | ~1.45 |
+
+Clearly worse. `5e-4`/`1e-3` not run (monotone extrapolation). The higher-LR lead
+does **not** transfer to our Adafactor+KD+rotation setup; if revisited, add an LR
+warmup first (higher LR is likely a slow-start problem, not a wrong direction).
+
+## Decisions (2026-09-23)
+
+- **Killed** `ste-rotate-20k-decay-lsq` at ~step 7000/20000: LSQ was within run
+  noise at 5k (1.3397 vs 1.3683) and decay is already replicated, so expected
+  information was low. Freed card 1 for the size ladder.
+- **Stopped** the LR screen after `2e-4`; skipped `5e-4`/`1e-3`.
+- **Ladder** runs 10000 steps per rung (the 5k point is logged for free, and the
+  scaling trend may be length-dependent), 0.6B ∥ 1.7B then 4B.
 
 ## Papers
 

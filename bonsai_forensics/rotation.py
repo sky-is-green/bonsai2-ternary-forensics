@@ -67,9 +67,16 @@ def sign_vector(seed: int, domain: str = DEFAULT_DOMAIN, block: int = 0, g: int 
     return out
 
 
-def rotations_for(d: int, seed: int, domain: str = DEFAULT_DOMAIN) -> list[np.ndarray]:
-    """Per-block sign vectors for a dimension `d` (spec §1.2)."""
-    g = block_size(d)
+def rotations_for(d: int, seed: int, domain: str = DEFAULT_DOMAIN,
+                  block: int | None = None) -> list[np.ndarray]:
+    """Per-block sign vectors for a dimension `d` (spec §1.2).
+
+    `block` overrides the spec's `min(1024, 2^v2(d))` rule — used to isolate the
+    block-size confound on a model whose width permits more than one divisor.
+    Must divide `d`."""
+    g = block_size(d) if block is None else int(block)
+    if g <= 0 or d % g:
+        raise ValueError(f"rotation block {g} does not divide width {d}")
     return [sign_vector(seed, domain, k, g) for k in range(d // g)]
 
 

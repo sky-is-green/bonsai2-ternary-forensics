@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import functools
 import json
 import sys
 import time
@@ -247,9 +248,17 @@ class RotatedLinear(torch.nn.Linear):
         return y
 
 
-def _rot_tensor(width: int, seed: int, dtype=torch.float32, device="cuda:0") -> torch.Tensor:
-    """Dense block-diagonal R for one width (spec 1.1/1.2, PRF signs)."""
-    rots = rotations_for(width, seed, "hidden")
+@functools.lru_cache(maxsize=None)
+def _rot_tensor(width: int, seed: int, dtype=torch.float32, device="cuda:0",
+                block: int | None = None) -> torch.Tensor:
+    """Dense block-diagonal R for one width (spec 1.1/1.2, PRF signs).
+
+    Cached by (width, seed, dtype, device, block): the rotation depends only on
+    the width, so every q/k/v/gate/up in a model shares one matrix and every
+    down_proj shares another. Without this the dense matrices are rebuilt per
+    module and a 4B model needs ~10 GB of pure rotation; with it, ~0.2 GB.
+    Callers must treat the result as read-only (it is a shared buffer)."""
+    rots = rotations_for(width, seed, "hidden", block=block)
     g = len(rots[0])
     out = np.zeros((width, width), dtype=np.float64)
     for k, signs in enumerate(rots):
@@ -259,7 +268,7 @@ def _rot_tensor(width: int, seed: int, dtype=torch.float32, device="cuda:0") -> 
 
 
 def wrap_rotated(model: torch.nn.Module, seed: int, ste: bool = False,
-                 learn_scale: bool = False) -> list[torch.nn.Module]:
+                 learn_scale: bool = False, block: int | None = None) -> list[torch.nn.Module]:
     """Absorb the spec rotation into every target linear (spec table 1.3:
     q/k/v, gate/up consume a rotated input (W R^T); o_proj/down emit a rotated
     output (R W, bias' = R b)) and keep the function exact via RotatedLinear
@@ -272,16 +281,16 @@ def wrap_rotated(model: torch.nn.Module, seed: int, ste: bool = False,
         parent_name, _, child = name.rpartition(".")
         parent = model.get_submodule(parent_name) if parent_name else model
         if name.endswith(("o_proj", "down_proj")):
-            rots = rotations_for(module.out_features, seed, "hidden")
+            rots = rotations_for(module.out_features, seed, "hidden", block=block)
             w_abs = absorb_output(module.weight.detach().cpu().float().numpy(), rots)
-            repl = RotatedLinear(module, None, _rot_tensor(module.out_features, seed, module.weight.dtype, module.weight.device).transpose(-1, -2), ste=ste, learn_scale=learn_scale)
+            repl = RotatedLinear(module, None, _rot_tensor(module.out_features, seed, module.weight.dtype, module.weight.device, block).transpose(-1, -2), ste=ste, learn_scale=learn_scale)
             if module.bias is not None:
-                r = _rot_tensor(module.out_features, seed, torch.float32, module.weight.device)
+                r = _rot_tensor(module.out_features, seed, torch.float32, module.weight.device, block)
                 repl.bias.data = (r @ module.bias.detach().cpu().float()).to(module.bias.dtype)
         else:
-            rots = rotations_for(module.in_features, seed, "hidden")
+            rots = rotations_for(module.in_features, seed, "hidden", block=block)
             w_abs = absorb_input(module.weight.detach().cpu().float().numpy(), rots)
-            repl = RotatedLinear(module, _rot_tensor(module.in_features, seed, module.weight.dtype, module.weight.device), None, ste=ste, learn_scale=learn_scale)
+            repl = RotatedLinear(module, _rot_tensor(module.in_features, seed, module.weight.dtype, module.weight.device, block), None, ste=ste, learn_scale=learn_scale)
         repl.weight.data = torch.from_numpy(w_abs.astype(np.float32)).to(
             device=module.weight.device, dtype=module.weight.dtype)
         repl.weight.requires_grad_(True)
@@ -345,7 +354,7 @@ def run(args) -> dict:
     student.gradient_checkpointing_enable()
     if args.rotate:
         rot_seed = args.rot_seed or args.seed
-        linears = wrap_rotated(student, rot_seed, ste=args.ste, learn_scale=args.learn_scale)
+        linears = wrap_rotated(student, rot_seed, ste=args.ste, learn_scale=args.learn_scale, block=args.rot_block)
         mode = "rotated + STE ternary"
         if args.learn_scale:
             mode += " + learnable scales"
@@ -581,6 +590,10 @@ def main(argv=None) -> int:
                              "when > 0 overrides --md-lr-scale with scale = shell^(q-1)/lr")
     parser.add_argument("--rotate", action="store_true",
                         help="train in the spec-rotated basis (W' = W R^T per target linear)")
+    parser.add_argument("--rot-block", type=int, default=None,
+                        help="override the spec rotation block size "
+                             "min(1024, 2^v2(d)); must divide every target width "
+                             "(used to isolate the block-size confound)")
     parser.add_argument("--ste", action="store_true",
                         help="ternarize the forward (T28 absmean STE) so the reported ratio is the "
                              "deployed ternary model's PPL ratio")

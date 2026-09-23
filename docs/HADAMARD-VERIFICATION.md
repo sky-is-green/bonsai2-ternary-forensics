@@ -79,6 +79,51 @@ Only these receive the forward transform. Everything else — norms, the
 linear-attention recurrent state path, conv1d — is outside it, matching the
 ~0.0976% held above ternary in Prism's own README.
 
+## Zero-state structure of the released 27B (2026-09-23)
+
+Decoding the released `Ternary-Bonsai-2-27B-PQ2_0.gguf` gives the deployed code
+distribution directly — no base model needed, only the codec. 402 PQ2_0 tensors,
+26,869,760,000 ternary params:
+
+| class | tensors | params | zero_frac |
+|---|---|---|---|
+| `attn_q` | 64 | 3,523,215,360 | 0.3276 |
+| `attn_k` / `attn_v` | 32 | 167,772,160 | 0.3274 |
+| `attn_o` | 16 | 503,316,480 | 0.3275 |
+| `ffn_gate` / `up` / `down` | 192 | 17,112,760,320 | 0.3276 |
+| linear-attn (`in_proj_qkv/z`, `out_proj`) | 96 | 3,019,898,880 | 0.3275 |
+| `output` (= `lm_head`) | 1 | 1,271,398,400 | 0.3279 |
+| `token_embd` | 1 | 1,271,398,400 | 0.3280 |
+| **overall** | **402** | **26,869,760,000** | **0.3276** |
+
+Codes are cleanly ternary (`raw==3` count 0) and sign-balanced (pos 0.3358,
+neg 0.3365). The rest of the file is the FP exemption set (96 BF16 + 353 F32
+tensors), matching Prism's ~0.0976%.
+
+**Reading.** The zero share is ~1/3 and *uniform to three decimals across tensor
+classes*. Under the absmean rule the share is predicted by the shape of the
+weight distribution and nothing else: a near-Gaussian distribution puts ~0.309
+of its mass inside the zero band, a mildly heavy-tailed one (kurtosis ~4.5)
+~0.328 (4M-sample simulation). The 27B sits on the heavy-tailed value; our
+rotated 1.7B canary sits on the Gaussian value (~0.314). Consequences:
+
+- the sparsity level is **not a separately tuned quantity** — there is no free
+  knob for it;
+- the cross-class uniformity is what the block-Hadamard produces, since it makes
+  every group near-Gaussian with similar variance;
+- this is *consistent with* the zero being the preimage of the quantizer band
+  rather than a formed attractor. It is **not proof** — a two-well potential
+  could also land at ~1/3. What it does rule out is any recipe that needs a
+  *tuned* sparsity target to reach Prism's quality.
+
+For reference, the unrotated 1.7B release is more sparse (0.383), consistent
+with a heavier tail; different base, basis and generation, so read as
+suggestive, not controlled.
+
+Scripts: `scripts/pilot/prism27_structure.py` (27B GGUF),
+`scripts/pilot/prism17_structure.py` (1.7B unpacked safetensors),
+`scripts/pilot/ours17_structure.py` (our checkpoint).
+
 ## Open items
 
 1. ~~**401 vs 402.**~~ **Resolved:** 402 = 401 forward-rotated (`weight_names`)
