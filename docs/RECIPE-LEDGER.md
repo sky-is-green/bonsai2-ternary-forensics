@@ -63,7 +63,8 @@ Corpus matters enormously: shakespeare runs flatter (86–90%), WikiText is hone
 | **Higher LR (2e-4)** | **worse** | 3.0058 vs 1.3683 at 5k |
 | **LSQ (learnable scales)** | **marginal** | 1.3397 vs 1.3683 — within noise |
 | **Rotation block 512 vs 1024** | **nil** | 1.2050 vs 1.2152, same size/corpus/steps |
-| **Mirror descent / q-norm map** | **falsified** | all `md-*` 7–206×; fights KD and oscillates |
+| **Mirror descent / q-norm map (one well)** | **falsified** | all `md-*` 7–206×; fights KD and oscillates |
+| **Two-well (many-to-one) mirror map** | **falsified** | `wiki-tw-0.6B` loss held ~172–177 vs baseline 5.75 (killed at step 1500); the additive form of the same potential (`tern-lam*`) collapsed too |
 | **Gate (freeze top-\|w\|)** | **falsified** | `ste-gate02-7k` 2.2225 vs control 1.9922 |
 | **Reproject cadences** | **falsified** | see `EXPERIMENTS.md` |
 | **Additive pow potential / per-group attractor (continuous)** | **falsified** | `tern-*`/`lam*` collapse |
@@ -135,6 +136,19 @@ be reproduced from public materials."*
   family) on an unmodified base (consistent with 'no retraining')."* Public
   frontier: GPTQ ~10× over naive → +salient ~3000× → **QuIP (rotation + error
   comp) reaches 2.1× FP16 at pure 1.125 bpw**.
+
+**Note on attribution (avoid a false lead).** Two *different* public leads are
+easily conflated: ThakiCloud's is **error compensation** (GPTQ/OBQ), for the
+*older* line; the **mirror-map / potential** idea came from a **community
+commenter** on the HF post (Caltech → Hassibi mirror descent), *not* from Prism
+or ThakiCloud. Prism's own text names neither — only *"proprietary Caltech
+intellectual property"* and *"a representation transformation… while preserving
+its behavior."* Both leads have now been tested for Bonsai 2: error
+compensation rejected (Gate 3 + scale ratio ≈1×), mirror maps falsified
+(one-well `md-*`, two-well `wiki-tw-0.6B`). Nothing Prism published *claims* a
+mechanism, so there is no published method to be inconsistent with — the most
+likely residual explanation is **scale/compute on the lever we already have**
+(rotation + QAT/KD), not a hidden potential.
 
 **The fork this exposes.** Our Gate 1–3 concluded Bonsai 2's ~8% residual is
 **trained weights** (QAT/KD); ThakiCloud concludes the **older** line is
