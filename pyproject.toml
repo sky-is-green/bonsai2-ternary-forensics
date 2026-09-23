@@ -12,6 +12,7 @@ license = { text = "Apache-2.0" }
 dependencies = [
     "numpy>=1.26",
     "pyyaml>=6.0",
+    "safetensors>=0.4",
 ]
 
 [project.optional-dependencies]
