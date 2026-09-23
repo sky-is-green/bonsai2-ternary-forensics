@@ -332,6 +332,41 @@ def mirror_step(linears, q: float, lr: float, scale: float = 1.0) -> None:
         m.weight.copy_(torch.sign(u) * u.abs().clamp_min(1e-30).pow(1.0 / (q - 1)).to(m.weight.dtype))
 
 
+@torch.no_grad()
+def mirror_step_tw(linears, lr: float, scale: float = 1.0, lam: float = 0.5) -> None:
+    """Two-well (many-to-one) mirror update: elastic-net zero band + rigid-cage
+    magnitude band.
+
+    `mirror_step` is a *one-well* map: it forms a single shell and cannot
+    populate the zero state (EXPERIMENTS.md: ternary needs two wells in
+    magnitude, at 0 and at s_g). This composes the two pieces the Caltech
+    mechanism names, as an inverse mapping rather than an additive penalty:
+
+      - elastic net (L1+L2)   -> a band of dual values collapses to exactly 0;
+      - rigid cage (|w|<=s_g) -> the surviving mass sits at the magnitude s_g.
+
+    Per group g: dual step `u = w - eta * g_n`, then
+        `w = sign(u) * clamp(|u| - lam*s_g, 0, s_g)`
+    so |w| lies in [0, s_g] with a flat zero band (many-to-one at 0) and a hard
+    cap at s_g (the magnitude well). `s_g` is the group absmean of the current
+    masters (the cage radius), detached. Run with `--lam 0`: the map is the
+    regularizer.
+    """
+    eta = lr * scale
+    for m in linears:
+        g = m.weight.grad
+        if g is None:
+            continue
+        w = m.weight.detach().float()
+        g_rms = g.float().square().mean().sqrt().clamp_min(1e-12)
+        u = (w - eta * (g.float() / g_rms)).reshape(-1, GROUP)
+        s = w.reshape(-1, GROUP).abs().mean(dim=1, keepdim=True).clamp_min(1e-8)
+        mag = torch.clamp(u.abs() - lam * s, min=0.0)   # elastic-net zero band
+        mag = torch.minimum(mag, s)                     # rigid-cage cap at s_g
+        snapped = torch.sign(u) * mag
+        m.weight.copy_(snapped.reshape(w.shape).to(m.weight.dtype))
+
+
 def run(args) -> dict:
     from transformers import Adafactor, AutoModelForCausalLM, AutoTokenizer
 
@@ -493,6 +528,8 @@ def run(args) -> dict:
                 apply_gate_grads(linears, masks)
             if args.update == "md":
                 mirror_step(linears, args.md_q, args.lr, args.md_lr_scale)
+            elif args.update == "tw":
+                mirror_step_tw(linears, args.lr, args.tw_lr_scale, args.tw_lam)
             else:
                 opt.step()
             step += 1
@@ -578,10 +615,15 @@ def main(argv=None) -> int:
     parser.add_argument("--eval-pre-snap", action="store_true",
                         help="at each reproject step, also record the projection cost of the "
                              "drifted masters before the snap (deep copy, no mutation)")
-    parser.add_argument("--update", choices=("adafactor", "md"), default="adafactor",
+    parser.add_argument("--update", choices=("adafactor", "md", "tw"), default="adafactor",
                         help="md = true RMD mirror-map step (arXiv:2202.10788 Algo 1): "
                              "u = sign(w)|w|^(q-1), dual step, map back; the map IS the "
-                             "regularizer, run with --lam 0")
+                             "regularizer, run with --lam 0. tw = two-well (many-to-one) "
+                             "mirror map: elastic-net zero band + rigid-cage magnitude band")
+    parser.add_argument("--tw-lam", type=float, default=0.5,
+                        help="two-well zero-band width, as a fraction of the group magnitude s_g")
+    parser.add_argument("--tw-lr-scale", type=float, default=1.0,
+                        help="dual-step scale for --update tw")
     parser.add_argument("--md-q", type=float, default=8.0,
                         help="q exponent of the mirror potential (1/q)|w|^q")
     parser.add_argument("--md-lr-scale", type=float, default=1.0,
