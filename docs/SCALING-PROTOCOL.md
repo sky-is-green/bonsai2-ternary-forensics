@@ -90,6 +90,13 @@ Fixed before any run:
 Either outcome is reportable. The point of pre-registering is that neither can be
 spun after the fact.
 
+**Status (2026-09-23):** the first two rungs satisfy the rule on the primary
+corpus at iso-convergence — 0.6B **51.9%** < 1.7B **63.6%** (WikiText, 20k +
+managed decay; ΔPPL 24.5 → 12.1 agrees). The **4B** rung is running
+(`run_wiki_convergence_4B.sh`); the rule is not fully met until it lands. See
+[`EXPERIMENTS.md`](EXPERIMENTS.md) for the benchmark-retention, capability/access
+and KLD results at the converged 1.7B.
+
 ### 8. Controls
 - **block:** 1.7B@512 (`ste-rotate-10k-block512`) — settles confound 3
 - **corpus:** 1.7B on both corpora — settles confound 1

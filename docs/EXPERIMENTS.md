@@ -488,6 +488,73 @@ warmup first (higher LR is likely a slow-start problem, not a wrong direction).
 - **Ladder** runs 10000 steps per rung (the 5k point is logged for free, and the
   scaling trend may be length-dependent), 0.6B ∥ 1.7B then 4B.
 
+## Iso-convergence results (2026-09-23) — the level, on comparable rulers
+
+Closes the last ladder confound ([`RETENTION-VS-SCALE.md`](RETENTION-VS-SCALE.md))
+and answers the *level* question on rulers comparable to Prism's.
+
+### Converged ladder (WikiText, 20k steps + managed decay, 8×8 holdout)
+
+| rung | best@ | ratio | retention | ΔPPL |
+|---|---|---|---|---|
+| 0.6B | 19500 | 1.9263 | 51.9% | 24.50 |
+| 1.7B | 17000 | 1.5731 | 63.6% | 12.08 |
+
+Direction: retention rises with size (matches Prism). Level: 1.7B at 63.6% **PPL**
+retention — but PPL retention ≠ benchmark retention (below).
+
+### Benchmark retention — the same ruler Prism publishes
+
+Minimal MC harness (`mc_bench.py`, 400 items × arc_easy / hellaswag / piqa), FP
+base vs the converged 1.7B checkpoint (step 17000):
+
+| | arc_easy | hellaswag | piqa | mean |
+|---|---|---|---|---|
+| FP base | 68.0% | 44.0% | 73.0% | 61.7% |
+| ternary | 46.8% | 38.5% | 58.0% | 47.8% |
+| retention | 68.8% | 87.5% | 79.5% | **77.5%** |
+
+77.5% benchmark retention at 1.7B — the same regime as Prism's own 1.7B (85–88%),
+and *higher* than our PPL retention (63.6%). The "PPL retention ≠ benchmark
+retention" caveat holds in our own numbers.
+
+### Capability vs access — what the loss actually is (`mc_capability.py`)
+
+2×2 over 1200 items: both_right 486, both_wrong 373, **fp_right_quant_wrong 254**,
+fp_wrong_quant_right 87. For the 254 quantization losses, the gold answer's rank:
+**rank 2 = 195 (76.8%)**, rank 3 = 43, rank 4 = 16; top-vs-gold margin median
+**0.40 nats** (56% < 0.5).
+
+**The loss is reliability, not capability.** In ~77% of the losses the model still
+had the gold as its *second* choice, and over half were near-ties — quantization
+moved the decision boundary, it did not remove the knowledge. A single retention
+number hides this.
+
+### KLD — llama.cpp convention, vs the FP base
+
+| | kld_mean | ppl_ratio | same_top_p |
+|---|---|---|---|
+| unconverged 1.7B | 0.9764 | 1.941 | 62.9% |
+| **converged 1.7B** | **0.7064** | **1.531** | **68.3%** |
+| Bonsai 27B (mrumhr, HF #54) | 0.3403 | 1.311 | 77.8% |
+
+Iso-convergence cut KLD by 28%. Against the 2× gate (0.681) we are at **1.04×** —
+essentially at the gate, versus 1.4× before; 2.08× Bonsai instead of 2.87×. (This
+is a 1.7B against their 27B.)
+
+Scripts: `run_mc_bench.sh`, `mc_bench.py`, `mc_capability.py`, `kld_eval.py`.
+
+### Caveat: the class-sensitivity non-monotonicity is a collapsed-regime artifact
+
+`class_sensitivity.py` (untrained, per-class ternary) reported attn-only 46.8×,
+ffn-only 730,233×, all 9,208× — so "all" looks *better* than "ffn-only", which is
+impossible if the numbers were a class ranking. They are not: ternary **PTQ with
+no fine-tuning collapses the model** (PPL 10³–10⁷), and PPL ordering is meaningless
+in the collapsed regime (two different garbage failure modes). The wrapper is not
+at fault — each wrapped linear is function-preserving in FP
+(`tests/ternary/test_rotation.py` asserts the identities, and training converges to
+ratio ~1.9). Read the probe as "FFN collapses worst", never as the 730k absolute.
+
 ## Papers
 
 - Azizan, Lale, Hassibi. Stochastic Mirror Descent on Overparameterized

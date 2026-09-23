@@ -96,16 +96,25 @@ retention rising with size, matching Prism's direction, with ΔPPL agreeing
 (56.0 → 20.8). So the recipe's scale trend is right once the teacher is
 in-distribution.
 
-**Confound 2 (convergence) — still open.** On WikiText both rungs peak at step
-10000 — the final step, still descending, i.e. under-trained (the iso-token
-problem). Absolute retention (31.7% / 50.5%) remains far below Prism's 85–88% at
-1.7B. The *direction* is settled; the *level* needs iso-convergence — see
-[`SCALING-PROTOCOL.md`](SCALING-PROTOCOL.md).
+**Confound 2 (convergence) — resolved: decisive.** Both WikiText rungs peaked at
+their final 10k step, i.e. under-trained. Re-run to iso-convergence (20k steps +
+managed decay; same corpus, seed, eval set):
 
-The 4B rung was abandoned as an instrument (block 512, split devices, no
-schedule, and diverging by step 5500); the block control above shows the block
-was not the reason.
+| rung | best@ | ratio | retention | ΔPPL |
+|---|---|---|---|---|
+| 0.6B (blk1024) | 19500 | 1.9263 | 51.9% | 24.50 |
+| 1.7B (blk1024) | 17000 | 1.5731 | **63.6%** | 12.08 |
+
+The direction survives and *strengthens*: **51.9% → 63.6%**, with ΔPPL agreeing
+(24.5 → 12.1). Convergence roughly halved the 0.6B ratio (3.15 → 1.93) and cut
+the 1.7B by a fifth (1.98 → 1.57) — the 10k numbers were a floor, not the level.
+
+**The 4B rung** (the pre-registered rule's third rung) re-runs under the same
+protocol — the first attempt was abandoned as an instrument (no schedule,
+diverging by step 5500; the block control above shows the block was not the
+reason). Script: `run_wiki_convergence_4B.sh`.
 
 Scripts: `scripts/pilot/run_size_ladder.sh`, `run_wiki_ladder.sh`,
-`run_rotblock_control.sh`, `plot_retention.py` (writes
-`artifacts/rmd/ladder-summary.md` + `docs/figures/retention-vs-scale.png`).
+`run_wiki_convergence.sh`, `run_wiki_convergence_4B.sh`, `run_rotblock_control.sh`,
+`plot_retention.py` (writes `artifacts/rmd/ladder-summary.md` +
+`docs/figures/retention-vs-scale.png`).
