@@ -49,7 +49,10 @@ def load_task(name: str, limit: int | None):
         for r in ds:
             rows.append((r["ctx"], r["endings"], int(r["label"])))
     elif name == "piqa":
-        ds = load_dataset("ybisk/piqa", split="validation")
+        # `ybisk/piqa` ships only a loading script, and datasets>=3 removed
+        # script support. `lighteval/piqa` (plain_text) is the same data as
+        # parquet, with the same goal/sol1/sol2/label schema.
+        ds = load_dataset("lighteval/piqa", "plain_text", split="validation")
         for r in ds:
             rows.append((f"Question: {r['goal']}\nAnswer:", [r["sol1"], r["sol2"]], int(r["label"])))
     else:
