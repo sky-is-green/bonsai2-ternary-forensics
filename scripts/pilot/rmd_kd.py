@@ -268,7 +268,8 @@ def _rot_tensor(width: int, seed: int, dtype=torch.float32, device="cuda:0",
 
 
 def wrap_rotated(model: torch.nn.Module, seed: int, ste: bool = False,
-                 learn_scale: bool = False, block: int | None = None) -> list[torch.nn.Module]:
+                 learn_scale: bool = False, block: int | None = None,
+                 suffixes: tuple[str, ...] = TARGET_SUFFIXES) -> list[torch.nn.Module]:
     """Absorb the spec rotation into every target linear (spec table 1.3:
     q/k/v, gate/up consume a rotated input (W R^T); o_proj/down emit a rotated
     output (R W, bias' = R b)) and keep the function exact via RotatedLinear
@@ -276,7 +277,7 @@ def wrap_rotated(model: torch.nn.Module, seed: int, ste: bool = False,
     quantization-aware training). Returns the wrapped modules with grad set."""
     wrapped = []
     for name, module in list(model.named_modules()):
-        if not (isinstance(module, torch.nn.Linear) and name.endswith(TARGET_SUFFIXES)):
+        if not (isinstance(module, torch.nn.Linear) and name.endswith(suffixes)):
             continue
         parent_name, _, child = name.rpartition(".")
         parent = model.get_submodule(parent_name) if parent_name else model
