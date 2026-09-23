@@ -74,12 +74,14 @@ def score_choice(model, tok, prompt: str, choice: str, device) -> float:
 
 def evaluate(model, tok, task: str, rows, device) -> dict:
     correct = 0
+    items = []
     for prompt, choices, gold in rows:
         scores = [score_choice(model, tok, prompt, c, device) for c in choices]
         pred = max(range(len(scores)), key=lambda i: scores[i])
         correct += int(pred == gold)
+        items.append({"task": task, "gold": gold, "pred": pred, "scores": scores})
     n = len(rows)
-    return {"task": task, "n": n, "acc": correct / n if n else 0.0}
+    return {"task": task, "n": n, "acc": correct / n if n else 0.0, "items": items}
 
 
 def main() -> int:
