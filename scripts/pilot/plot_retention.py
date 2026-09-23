@@ -1,13 +1,14 @@
 """Retention vs scale — Prism's published curve vs our ladder, with an
-absolute-PPL-delta view.
+absolute-PPL-delta view and a per-corpus split.
 
-Why two panels: the ratio `student_ppl / teacher_ppl` is not scale-comparable
-when the FP teacher itself differs across sizes (a weaker teacher is easier to
-match). Absolute delta `student_ppl - teacher_ppl` is the complementary view.
-Report both; read neither alone.
+Why per-corpus: the ratio `student_ppl / teacher_ppl` is not comparable across
+corpora when the FP teacher itself differs (a weaker teacher is easier to
+match). tinyshakespeare gives teacher PPL 49-73 (out of distribution);
+WikiText gives 22-28. The same recipe shows opposite scale trends on the two,
+which is the finding, so they must be plotted separately.
 
 Prism points are transcribed from the released whitepapers
-(see docs/RETENTION-VS-SCALE.md). Our points come from the ladder reports.
+(see docs/RETENTION-VS-SCALE.md).
 
     python scripts/pilot/plot_retention.py
 """
@@ -31,13 +32,16 @@ PRISM = {
     "27B (Bonsai 2)": [(27.0, 0.982)],
 }
 
-# label -> (report dir, params_B)
+# label -> (report dir, params_B, corpus)
 RUNS = {
-    "0.6B (blk 1024)": (HB / "artifacts/rmd/ladder-0.6B", 0.6),
-    "1.7B (blk 1024)": (HB / "artifacts/rmd/ladder-1.7B", 1.7),
-    "4B (blk 512)": (HB / "artifacts/rmd/ladder-4B", 4.0),
-    "1.7B (blk 512)": (HB / "artifacts/rmd/ste-rotate-10k-block512", 1.7),
+    "shakespeare 0.6B (blk1024)": (HB / "artifacts/rmd/ladder-0.6B", 0.6, "tinyshakespeare"),
+    "shakespeare 1.7B (blk1024)": (HB / "artifacts/rmd/ladder-1.7B", 1.7, "tinyshakespeare"),
+    "shakespeare 1.7B (blk512)": (HB / "artifacts/rmd/ste-rotate-10k-block512", 1.7, "tinyshakespeare"),
+    "wiki 0.6B (blk1024)": (HB / "artifacts/rmd/wiki-0.6B", 0.6, "wikitext"),
+    "wiki 1.7B (blk1024)": (HB / "artifacts/rmd/wiki-1.7B", 1.7, "wikitext"),
 }
+
+COLORS = {"wikitext": "seagreen", "tinyshakespeare": "crimson"}
 
 
 def load(path: Path):
@@ -52,17 +56,12 @@ def load(path: Path):
         return sum(r["ppl"] - r["teacher_ppl"] for r in ev["regions"]) / len(ev["regions"])
 
     return dict(
-        params=None,
         teacher_ppl=d.get("teacher_ppl"),
-        steps=d.get("steps"),
         best_step=best["step"],
         best_ratio=best["aggregate"]["mean_ratio"],
         best_retention=1.0 / best["aggregate"]["mean_ratio"],
-        best_ppl=best["aggregate"]["mean_ppl"],
         best_delta=delta(best),
-        final_step=fin["step"],
         final_ratio=fin["aggregate"]["mean_ratio"],
-        final_retention=1.0 / fin["aggregate"]["mean_ratio"],
         final_delta=delta(fin),
     )
 
@@ -74,36 +73,39 @@ def main() -> int:
     args = ap.parse_args()
 
     rows = {}
-    for label, (path, params) in RUNS.items():
+    for label, (path, params, corpus) in RUNS.items():
         r = load(path)
         if r:
             r["params"] = params
+            r["corpus"] = corpus
             rows[label] = r
 
     # --- table ---
     lines = ["# Size ladder — ratio and absolute-delta views", "",
-             "| run | params | teacher PPL | best step | best ratio | retention | "
-             "best PPL | ΔPPL (best) | final ratio | final ΔPPL |",
+             "| run | corpus | params | teacher PPL | best step | best ratio | "
+             "retention | ΔPPL (best) | final ratio | final ΔPPL |",
              "|---|---|---|---|---|---|---|---|---|---|"]
-    for label, r in sorted(rows.items(), key=lambda kv: kv[1]["params"]):
+    for label, r in sorted(rows.items(), key=lambda kv: (kv[1]["corpus"], kv[1]["params"])):
         lines.append(
-            f"| {label} | {r['params']}B | {r['teacher_ppl']:.2f} | {r['best_step']} | "
-            f"{r['best_ratio']:.4f} | {r['best_retention']*100:.1f}% | {r['best_ppl']:.2f} | "
+            f"| {label} | {r['corpus']} | {r['params']}B | {r['teacher_ppl']:.2f} | "
+            f"{r['best_step']} | {r['best_ratio']:.4f} | {r['best_retention']*100:.1f}% | "
             f"{r['best_delta']:.2f} | {r['final_ratio']:.4f} | {r['final_delta']:.2f} |")
     table = "\n".join(lines) + "\n"
     Path(args.summary).write_text(table)
     print(table)
 
     # --- figure ---
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.6))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12.5, 4.8))
 
     for label, pts in PRISM.items():
         ax1.plot([p for p, _ in pts], [r for _, r in pts], "o--",
-                 label=f"Prism {label}", alpha=0.8)
-    xs = [r["params"] for r in rows.values()]
-    ys = [r["best_retention"] for r in rows.values()]
-    if xs:
-        ax1.plot(xs, ys, "s-", color="crimson", lw=2, label="ours (PPL ratio)")
+                 label=f"Prism {label}", alpha=0.7)
+    for corpus in ("wikitext", "tinyshakespeare"):
+        pts = sorted((r["params"], r["best_retention"])
+                     for r in rows.values() if r["corpus"] == corpus)
+        if pts:
+            ax1.plot([p for p, _ in pts], [v for _, v in pts], "s-",
+                     color=COLORS[corpus], lw=2, label=f"ours — {corpus} (PPL ratio)")
     ax1.axhline(0.97, color="grey", ls=":", lw=1)
     ax1.text(0.62, 0.973, "mission bar (27B)", color="grey", fontsize=8)
     ax1.set_xscale("log")
@@ -111,17 +113,17 @@ def main() -> int:
     ax1.set_xticklabels(["0.6B", "1.7B", "4B", "8B", "27B"])
     ax1.set_xlabel("parameters")
     ax1.set_ylabel("retention (1 / ratio)")
-    ax1.set_ylim(0.4, 1.02)
+    ax1.set_ylim(0.2, 1.02)
     ax1.grid(alpha=0.3)
-    ax1.set_title("Retention vs scale (ratio view)")
+    ax1.set_title("Retention vs scale — direction depends on corpus")
     ax1.legend(fontsize=7, loc="lower right")
 
-    if xs:
-        ys_delta = [r["best_delta"] for r in rows.values()]
-        ax2.plot(xs, ys_delta, "s-", color="darkorange", lw=2)
-        for label, r in rows.items():
-            ax2.annotate(label, (r["params"], r["best_delta"]), fontsize=7,
-                         textcoords="offset points", xytext=(4, 4))
+    for corpus in ("wikitext", "tinyshakespeare"):
+        pts = sorted((r["params"], r["best_delta"])
+                     for r in rows.values() if r["corpus"] == corpus)
+        if pts:
+            ax2.plot([p for p, _ in pts], [v for _, v in pts], "s-",
+                     color=COLORS[corpus], lw=2, label=corpus)
     ax2.set_xscale("log")
     ax2.set_xticks([0.6, 1.7, 4, 8, 27])
     ax2.set_xticklabels(["0.6B", "1.7B", "4B", "8B", "27B"])
@@ -129,6 +131,7 @@ def main() -> int:
     ax2.set_ylabel("ΔPPL = student − teacher (best step)")
     ax2.grid(alpha=0.3)
     ax2.set_title("Absolute degradation vs scale")
+    ax2.legend(fontsize=8)
 
     fig.tight_layout()
     out = Path(args.out)

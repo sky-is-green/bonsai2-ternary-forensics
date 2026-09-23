@@ -69,39 +69,42 @@ matched, and compare the *shape* of our retention-vs-size curve to Prism's:
 
 That is the falsifiable question. "We could not reach 97% at 1.7B" is not.
 
-## Ladder results so far (2026-09-23) — and three confounds
+## Ladder results — resolved (2026-09-23)
 
-TinyShakespeare, 10k steps, seed 1337, 8×8 holdout. Holdout verified against the
-F11 leak: 589 windows − (8 regions × 8) = 525 train windows, matching the log.
+10k steps, seed 1337, 8×8 holdout (verified against the F11 leak). Two corpora
+plus a block-size control:
 
-| rung | teacher PPL | best step | best ratio | retention | ΔPPL (best) |
-|---|---|---|---|---|---|
-| 0.6B (blk 1024) | 73.36 | 6500 | 1.1033 | 90.6% | 7.00 |
-| 1.7B (blk 1024) | 48.98 | 10000 | 1.2152 | 82.3% | 10.04 |
-| 4B (blk 512, split) | — | — | ~3.3 (killed @6000) | — | — |
+| run | corpus | teacher PPL | best@ | ratio | retention | ΔPPL |
+|---|---|---|---|---|---|---|
+| 0.6B (blk1024) | tinyshakespeare | 73.36 | 6500 | 1.1033 | 90.6% | 7.00 |
+| 1.7B (blk1024) | tinyshakespeare | 48.98 | 10000 | 1.2152 | 82.3% | 10.04 |
+| 1.7B (**blk512**) | tinyshakespeare | 48.98 | 9000 | 1.2050 | 83.0% | 9.76 |
+| 0.6B (blk1024) | **wikitext** | 27.99 | 10000 | 3.1506 | 31.7% | 56.01 |
+| 1.7B (blk1024) | **wikitext** | 21.92 | 10000 | 1.9798 | 50.5% | 20.79 |
 
-**Both metrics agree** — the smaller model degrades less in ratio *and* in
-absolute ΔPPL, so it is not a metric artifact. The 1.7B's trajectory also
-plateaus (oscillating ~1.22–1.34) rather than still descending, so it is not
-under-training either. On this evidence the recipe shows the **opposite** of
-Prism's scale trend. Three confounds must be cleared first:
+**Confound 3 (rotation block) — resolved: nil.** Same size, corpus and steps:
+blk512 gives 1.2050 vs blk1024's 1.2152 — marginally *better*. The block explains
+nothing once trained; its ~3× penalty is an init-only effect.
 
-1. **Corpus.** Teacher PPL is 73 (0.6B) / 49 (1.7B) on tinyshakespeare — both far
-   out of distribution, so "retention of a struggling FP model" may measure
-   corpus quirks. The `wiki-*` runs (teacher PPL ~25) address this.
-2. **Rotation block.** The spec rule gives block 512 for the 4B (widths 2560,
-   9728) but 1024 for 0.6B/1.7B, so the ladder varies block as well as size.
-   Early signal on the 1.7B control: block 512 is ~3× worse at init and ~10%
-   worse at step 2000. `ste-rotate-10k-block512` settles the converged effect.
-3. **Convergence / schedule.** All rungs are constant-LR with no schedule, and
-   the 1.7B sits near its divergence boundary. None is a converged, scheduled run.
+**Confound 1 (corpus) — resolved: decisive.** On WikiText (teacher PPL 22–28,
+in-distribution) retention is 31.7% / 50.5%, versus 90.6% / 82.3% on
+tinyshakespeare. The toy corpus was flattering by a very large margin.
 
-**Protocol implication.** A fixed-step ladder is iso-token, which under-trains
-larger models; and a ratio measured against a per-model teacher is not
-scale-comparable when teacher PPL varies. A defensible scaling test needs
-(a) iso-compute or iso-convergence (e.g. managed decay per rung), (b) a corpus
-where the teacher is in-distribution, and (c) a common reference for the metric.
-Until then the ladder supports no scaling claim in either direction.
+**The earlier "reversal" was a corpus artifact.** On tinyshakespeare smaller
+looked better (90.6% → 82.3%); on WikiText it inverts to **31.7% → 50.5%** —
+retention rising with size, matching Prism's direction, with ΔPPL agreeing
+(56.0 → 20.8). So the recipe's scale trend is right once the teacher is
+in-distribution.
+
+**Confound 2 (convergence) — still open.** On WikiText both rungs peak at step
+10000 — the final step, still descending, i.e. under-trained (the iso-token
+problem). Absolute retention (31.7% / 50.5%) remains far below Prism's 85–88% at
+1.7B. The *direction* is settled; the *level* needs iso-convergence — see
+[`SCALING-PROTOCOL.md`](SCALING-PROTOCOL.md).
+
+The 4B rung was abandoned as an instrument (block 512, split devices, no
+schedule, and diverging by step 5500); the block control above shows the block
+was not the reason.
 
 Scripts: `scripts/pilot/run_size_ladder.sh`, `run_wiki_ladder.sh`,
 `run_rotblock_control.sh`, `plot_retention.py` (writes
