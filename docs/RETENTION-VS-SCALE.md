@@ -1,9 +1,10 @@
 # Retention vs scale — Prism published numbers vs our recipe
 
 > **Evidence status (2026-09-24):** the 0.6B/1.7B WikiText rungs are completed
-> legacy validation results; the 4B rung is still in progress. The pre-registered
-> primary-corpus PPL threshold is not met by the available rungs, and all
-> “best” values are validation-selected. See
+> legacy validation results; the 4B rung was **dropped by decision** (2026-09-24;
+> the ladder question is superseded by the archived conclusion). The
+> pre-registered primary-corpus PPL threshold is not met by the available rungs,
+> and all “best” values are validation-selected. See
 > [`REPRODUCIBILITY-AUDIT.md`](REPRODUCIBILITY-AUDIT.md).
 
 **Why this exists.** The mission bar (≥97% retention) is Prism's **27B** number.
@@ -112,16 +113,17 @@ managed decay; same corpus, seed, eval set):
 | 1.7B (blk1024) | 17000 | 1.5731 | **63.6%** | 12.08 |
 
 The two available rungs show a promising direction, **51.9% → 63.6%**, with
-ΔPPL agreeing (24.5 → 12.1), but this is not yet the completed pre-registered
-result: the 4B rung is still running and the primary-corpus teacher-PPL
-threshold (largest rung ≤20) is not met. The earlier 10k values were floors,
-not final levels.
+ΔPPL agreeing (24.5 → 12.1), but this is not the completed pre-registered
+result: the primary-corpus teacher-PPL threshold (largest rung ≤20) is not met,
+and the earlier 10k values were floors, not final levels.
 
-**The 4B rung** is the deciding third point. The first attempt was abandoned as
-an instrument (no schedule, diverging by step 5500); the replacement uses the
-same managed schedule and is tracked in `artifacts/rmd/wiki-conv-4B.log`.
-Do not call the scaling question resolved until its report and manifest are
-complete.
+**The 4B rung was dropped (2026-09-24).** It was the deciding third point, but
+the ladder question is superseded by the archived conclusion
+([`FORENSIC-ARCHIVE.md`](FORENSIC-ARCHIVE.md)), so it was not run. The first
+attempt had already been abandoned as an instrument (no schedule, diverging by
+step 5500). The scaling question is therefore **not resolved**: the 0.6B → 1.7B
+iso-convergence trend is the available partial evidence, and the pre-registered
+rule is not met.
 
 Scripts: `scripts/pilot/run_size_ladder.sh`, `run_wiki_ladder.sh`,
 `run_wiki_convergence.sh`, `run_wiki_convergence_4B.sh`, `run_rotblock_control.sh`,

@@ -1,7 +1,8 @@
 # Scaling protocol — does our recipe scale like Prism's?
 
-Status: **primary ladder in progress (2026-09-24).** The 0.6B and 1.7B
-WikiText rungs are complete; the 4B rung is running. The cross-architecture
+Status: **primary ladder closed without the 4B rung (2026-09-24).** The 0.6B and
+1.7B WikiText rungs are complete; the 4B rung was dropped by decision (the
+ladder question is superseded by the archived conclusion). The cross-architecture
 robustness extension is specified in [`REPRODUCIBILITY-AUDIT.md`](REPRODUCIBILITY-AUDIT.md).
 Companion: [`RETENTION-VS-SCALE.md`](RETENTION-VS-SCALE.md) (the ladder results
 and the confounds this protocol removes).
@@ -96,10 +97,10 @@ spun after the fact.
 **Status (2026-09-24):** the first two rungs show the expected direction at
 iso-convergence — 0.6B **51.9%** < 1.7B **63.6%** (WikiText, 20k + managed
 decay; ΔPPL 24.5 → 12.1 agrees) — but the primary-corpus teacher-PPL threshold
-is not met and the **4B** rung is still running
-(`run_wiki_convergence_4B.sh`). The rule is not fully met until that run lands.
-See [`EXPERIMENTS.md`](EXPERIMENTS.md) for the benchmark-retention,
-capability/access and KLD results, with their current validity caveats.
+is not met and the **4B rung was dropped by decision**, so the rule is **not
+met** and the scaling question is unresolved. See [`EXPERIMENTS.md`](EXPERIMENTS.md)
+for the benchmark-retention, capability/access and KLD results, with their
+current validity caveats.
 
 ### 8. Controls
 - **block:** 1.7B@512 (`ste-rotate-10k-block512`) — settles confound 3

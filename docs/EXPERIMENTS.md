@@ -491,10 +491,10 @@ warmup first (higher LR is likely a slow-start problem, not a wrong direction).
 ## Iso-convergence results (2026-09-23) — legacy ladder and screening metrics
 
 These are completed legacy Qwen3 pilot observations, not a completed
-pre-registered scale result. The 4B rung is still required, and the primary
-WikiText teacher-PPL threshold in `SCALING-PROTOCOL.md` is not met by the two
-available rungs. The benchmark section below is a local screening proxy, not
-Prism's published ruler.
+pre-registered scale result. The 4B rung was dropped by decision (2026-09-24),
+and the primary WikiText teacher-PPL threshold in `SCALING-PROTOCOL.md` is not
+met by the two available rungs. The benchmark section below is a local screening
+proxy, not Prism's published ruler.
 
 ### Converged ladder (WikiText, 20k steps + managed decay, 8×8 holdout)
 
