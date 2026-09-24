@@ -24,3 +24,5 @@ jobs:
           pip install -e ".[test]"
       - name: Tests (offline, synthetic)
         run: pytest tests -q
+      - name: Frozen spec hash
+        run: python -m bonsai_forensics.spec_hash --check

@@ -5,7 +5,6 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=flat&logo=pytorch&logoColor=white)](https://github.com/sky-is-green/bonsai2-ternary-forensics)
 [![NumPy](https://img.shields.io/badge/NumPy-013243?style=flat&logo=numpy&logoColor=white)](https://github.com/sky-is-green/bonsai2-ternary-forensics)
 [![pytest](https://img.shields.io/badge/pytest-0A9EDC?style=flat&logo=pytest&logoColor=white)](https://github.com/sky-is-green/bonsai2-ternary-forensics)
-[![Archived](https://img.shields.io/badge/status-archived-lightgrey?style=flat)](https://github.com/sky-is-green/bonsai2-ternary-forensics)
 [![Last commit](https://img.shields.io/github/last-commit/sky-is-green/bonsai2-ternary-forensics/main?style=flat&label=Last%20commit&logo=git)](https://github.com/sky-is-green/bonsai2-ternary-forensics/commits/main)
 [![Repo size](https://img.shields.io/github/repo-size/sky-is-green/bonsai2-ternary-forensics?style=flat&label=Repo%20size)](https://github.com/sky-is-green/bonsai2-ternary-forensics)
 Independent forensics on **Bonsai 2 27B**, Prism ML's ~2 bpw ternary model built
@@ -34,8 +33,17 @@ ThakiCloud, and it redistributes no model weights.
   reference gives the published 2.1x on a fixed passage; on held-out windows
   with real calibration data the same configurations collapse (1,178x to
   ~35,000x). Public PTQ at ~2 bpw does not survive off-calibration here.
+- **The mechanism is ordinary ternary QAT in the rotated basis.** The large-`q`
+  Mirror-Descent / RMD recipe is the *lineage*, not what Bonsai 2 runs: a direct
+  mirror-map arm is falsified inside the ternary loop, the zero share (0.328) is
+  the quantizer's central band rather than a formed attractor, and the ~8% of
+  trits RTN cannot reach is boundary placement from training, not an optimizer
+  signature. Rotation-in-the-loop + STE/KD + a managed schedule accounts for the
+  gap. See [`docs/FORENSIC-ARCHIVE.md`](docs/FORENSIC-ARCHIVE.md).
 
 Full write-up: [`docs/WHITEPAPER.md`](docs/WHITEPAPER.md).
+Settled Mirror-Descent question and archive:
+[`docs/FORENSIC-ARCHIVE.md`](docs/FORENSIC-ARCHIVE.md).
 Every falsified route, with evidence and revisit cost:
 [`docs/FAILURES.md`](docs/FAILURES.md).
 Detailed gate reports: [`research/`](research/).
@@ -47,12 +55,13 @@ bonsai_forensics/        core library (rotation, quant, GPTQ, PQ2_0 codec,
                          oracle, gates, recovery) + spec.md
 scripts/gate3/           SCR noise test, 27B prefix Hessians, GPTQ sweep,
                          H-objective diagnostics
-scripts/pilot/           block-wise KD and data-selection pilot scripts
+scripts/pilot/           block-wise KD and data-selection pilots; the DSpark
+                         drafter track (train / parity / export / benchmark)
 scripts/eval_llama_server.py  standalone smoke / perplexity evaluation
 tests/ternary/           offline test suite (synthetic tensors; no downloads)
-docs/                    white paper, failure register, model registry,
-                         reproducibility audit, quantization landscape,
-                         prior art, DSpark track
+docs/                    white paper, failure register, forensic archive,
+                         model registry, reproducibility audit, quantization
+                         landscape, prior art, DSpark track
 research/                Gate-1/2/3 write-ups
 configs/                 run configs, pinned model registry
 ```
@@ -139,12 +148,13 @@ The scripts take their artifact locations from the repo root; set
 ## Tests
 
 ```sh
-pytest tests/ternary -q
+pytest tests -q
 python -m bonsai_forensics.spec_hash --check
 ```
 
-The suite is offline and uses synthetic tensors only. It pins the frozen wire
-contract ([`bonsai_forensics/spec.md`](bonsai_forensics/spec.md), canonical hash
+CI (`.github/workflows/ci.yml`) runs `pytest tests -q` on Python 3.13 with CPU
+torch. The suite is offline and uses synthetic tensors only. It pins the frozen
+wire contract ([`bonsai_forensics/spec.md`](bonsai_forensics/spec.md), canonical hash
 `0d2c008b4aee726351f9b90e44ec003c18b579d8690db24c77a089d9e1fc652b`).
 
 ## Caveats
