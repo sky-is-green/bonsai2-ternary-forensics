@@ -74,11 +74,27 @@ def test_config_validation(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         rq.load_config(bad)
     config = rq.load_config(CONFIG_PATH)
-    config["quant"] = dict(config["quant"], group_size=128)
+
+    # PQ2_0-class (g128) is the Bonsai-2-aligned path and must be unrefined.
+    config["quant"] = dict(config["quant"], group_size=128, refine_iters=0)
     path = tmp_path / "g128.yaml"
     path.write_text(yaml.safe_dump(config), encoding="utf-8")
-    with pytest.raises(ValueError):
-        rq.load_config(path)
+    assert rq.load_config(path)["quant"]["group_size"] == 128
+
+    # g128 with LS refinement is rejected (Gate 1: refinement moves trits away
+    # from Prism on the PQ2_0-class artifact).
+    config["quant"] = dict(config["quant"], group_size=128, refine_iters=4)
+    refined = tmp_path / "g128-refined.yaml"
+    refined.write_text(yaml.safe_dump(config), encoding="utf-8")
+    with pytest.raises(ValueError, match="refine_iters 0"):
+        rq.load_config(refined)
+
+    # An unsupported group size is rejected.
+    config["quant"] = dict(config["quant"], group_size=64, refine_iters=0)
+    bad_group = tmp_path / "g64.yaml"
+    bad_group.write_text(yaml.safe_dump(config), encoding="utf-8")
+    with pytest.raises(ValueError, match="group_size must be"):
+        rq.load_config(bad_group)
 
 
 @pytest.mark.parametrize(
@@ -104,6 +120,18 @@ def test_config_validation(tmp_path: Path) -> None:
         ("model.layers.0.input_layernorm.weight", 1, "hidden_norm"),
         ("model.layers.0.post_attention_layernorm.weight", 1, "hidden_norm"),
         ("model.layers.0.linear_attn.conv1d.weight", 3, "exempt"),
+        # architecture-aware extension (Qwen3.5 / Phi-3 / GPT-NeoX / OPT)
+        ("model.layers.0.linear_attn.in_proj_qkv.weight", 2, "rot_input"),
+        ("model.layers.0.linear_attn.in_proj_z.weight", 2, "rot_input"),
+        ("model.layers.0.self_attn.qkv_proj.weight", 2, "rot_input"),
+        ("model.layers.0.mlp.gate_up_proj.weight", 2, "rot_input"),
+        ("embed_out.weight", 2, "rot_input"),
+        ("gpt_neox.layers.0.attention.query_key_value.weight", 2, "rot_input"),
+        ("gpt_neox.layers.0.mlp.dense_h_to_4h.weight", 2, "rot_input"),
+        ("gpt_neox.layers.0.attention.dense.weight", 2, "rot_output"),
+        ("gpt_neox.layers.0.mlp.dense_4h_to_h.weight", 2, "rot_output"),
+        ("model.decoder.layers.0.fc1.weight", 2, "rot_input"),
+        ("model.decoder.layers.0.fc2.weight", 2, "rot_output"),
     ],
 )
 def test_classify_tensor(name: str, ndim: int, expected: str) -> None:
@@ -119,6 +147,12 @@ def test_code_roles_match_spec_sets() -> None:
     assert set(rq.EXEMPT_ABSORB_SUFFIXES) == set(roles["exempt_absorb_input_suffixes"])
     assert set(rq.HIDDEN_NORM_SUFFIXES) == set(roles["hidden_norm_suffixes"])
     assert set(rq.HIDDEN_NORM_EXACT) == set(roles["hidden_norm_exact"])
+
+
+def test_extended_roles_are_superset_of_spec() -> None:
+    """The architecture-aware extension must only add to the frozen spec sets."""
+    assert set(rq.OUTPUT_ROTATED_SUFFIXES) <= set(rq.EXTENDED_OUTPUT_ROTATED_SUFFIXES)
+    assert set(rq.INPUT_ABSORBED_SUFFIXES) <= set(rq.EXTENDED_INPUT_ABSORBED_SUFFIXES)
 
 
 def test_unknown_tensor_is_refused() -> None:
@@ -283,4 +317,4 @@ def test_artifact_metadata_from_config(tmp_path: Path) -> None:
     result = rq.run_quant(config, rq.SyntheticTensorSource(), config["output"]["run_dir"], max_tensors=1)
     reader = pg.GGUFReader(result.artifact)
     assert reader.metadata["general.architecture"] == "qwen3"
-    assert reader.metadata["general.name"] == "Qwen/Qwen3.8-0.6B"
+    assert reader.metadata["general.name"] == "Qwen/Qwen3-0.6B"

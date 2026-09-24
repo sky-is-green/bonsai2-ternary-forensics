@@ -57,6 +57,33 @@ def test_ternary_lsq_scale_receives_gradient() -> None:
     assert torch.allclose(ratio, ratio.round(), atol=1e-4)
 
 
+def test_wrap_rotated_preserves_fp_function_in_both_modes() -> None:
+    from types import SimpleNamespace
+
+    class Toy(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.config = SimpleNamespace(model_type="llama", tie_word_embeddings=True,
+                                          num_hidden_layers=1)
+            self.q_proj = torch.nn.Linear(8, 8, bias=False)
+            self.o_proj = torch.nn.Linear(8, 8, bias=False)
+            self.gate_proj = torch.nn.Linear(8, 8, bias=False)
+            self.up_proj = torch.nn.Linear(8, 8, bias=False)
+            self.down_proj = torch.nn.Linear(8, 8, bias=False)
+
+    torch.manual_seed(3)
+    x = torch.randn(2, 8)
+    for mode in ("residual", "input"):
+        model = Toy()
+        expected = model.down_proj(model.up_proj(model.gate_proj(x)))
+        profile = rmd.infer_profile(model, "llama")
+        wrapped = rmd.wrap_rotated(model, seed=1337, block=8, rotation_mode=mode,
+                                   profile=profile)
+        actual = model.down_proj(model.up_proj(model.gate_proj(x)))
+        assert len(wrapped) == 5
+        assert torch.allclose(actual, expected, atol=1e-5)
+
+
 def test_ternary_ste_output_is_codes_times_original_absmean() -> None:
     torch.manual_seed(0)
     w = torch.randn(16, 256) * 0.05

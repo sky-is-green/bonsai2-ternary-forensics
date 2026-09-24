@@ -6,6 +6,13 @@
 > to its full entry (claim, method, evidence, cost to revisit).
 > **Spec hash:** `0d2c008b4aee726351f9b90e44ec003c18b579d8690db24c77a089d9e1fc652b`
 > **Runtime write-up:** [`docs/BONSAI-RUNTIME.md`](BONSAI-RUNTIME.md)
+> **Current audit:** [`REPRODUCIBILITY-AUDIT.md`](REPRODUCIBILITY-AUDIT.md)
+>
+> **Evidence boundary (2026-09-24):** this is a historical forensic write-up.
+> The public checkout does not contain all referenced Gate/T29/private-history
+> artifacts, and the current work has not established packed PQ2_0/Bonsai-2
+> parity, a completed 27B QAT run, or an unbiased final test-set claim. Do not
+> read the older programme-status language below as a current run manifest.
 
 This document records what is *verified*, what end-state was chosen, and why.
 It is deliberately brief on negative results: load-bearing falsifications are

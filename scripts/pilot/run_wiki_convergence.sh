@@ -10,11 +10,11 @@
 #
 # Both rungs run in parallel, one per card. Extend STEPS if a rung's best step is
 # still its last step.
-set -u
+set -uo pipefail
 cd "$(dirname "$0")/../.."
 PY=${PY:-$HOME/.unsloth/studio/unsloth_studio/bin/python}
 CORPUS=artifacts/ternary/pilot/wikitext_3000.txt
-CANARY=$HOME/Desktop/work/hivebench/artifacts/ternary/canary/hf
+CANARY=${CANARY:-Qwen/Qwen3-1.7B}
 STEPS=${STEPS:-20000}
 DECAY="--lr-decay-warmup 10000 --lr-decay-patience 2000 --lr-decay-factor 0.5 \
 --lr-decay-drift-eps 0.10 --lr-decay-cooldown 1000 --lr-decay-max 3 --lr-floor 5e-6"
@@ -29,15 +29,23 @@ if ! mkdir "$LOCK" 2>/dev/null; then echo "already running ($LOCK)"; exit 1; fi
 trap 'rmdir "$LOCK"' EXIT
 
 run_one() {  # tag model visible_devices
-  local tag=$1 model=$2 vis=$3
+  local tag=$1 model=$2 vis=$3 code
   echo "[wikiconv] start $tag model=$model vis=$vis $(date +%H:%M:%S)"
-  HIP_VISIBLE_DEVICES=$vis $PY scripts/pilot/rmd_kd.py $COMMON \
-    --model-dir "$model" --device cuda:0 --teacher-device cuda:0 \
-    --out "artifacts/rmd/$tag" > "artifacts/rmd/$tag.log" 2>&1
-  echo "[wikiconv] exit $tag code=$? $(date +%H:%M:%S)"
+  if HIP_VISIBLE_DEVICES=$vis $PY scripts/pilot/rmd_kd.py $COMMON \
+      --model-dir "$model" --device cuda:0 --teacher-device cuda:0 \
+      --out "artifacts/rmd/$tag" > "artifacts/rmd/$tag.log" 2>&1; then
+    code=0
+  else
+    code=$?
+  fi
+  echo "[wikiconv] exit $tag code=$code $(date +%H:%M:%S)"
+  return "$code"
 }
 
-run_one wiki-conv-0.6B "Qwen/Qwen3-0.6B" 0 &
-run_one wiki-conv-1.7B "$CANARY"         1 &
-wait
-echo "[wikiconv] ALL DONE $(date +%H:%M:%S)"
+run_one wiki-conv-0.6B "Qwen/Qwen3-0.6B" 0 & p0=$!
+run_one wiki-conv-1.7B "$CANARY"         1 & p1=$!
+status=0
+wait "$p0" || status=$?
+wait "$p1" || status=$?
+echo "[wikiconv] ALL DONE status=$status $(date +%H:%M:%S)"
+exit "$status"

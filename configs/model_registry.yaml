@@ -1,0 +1,276 @@
+schema_version: 1
+# Pinned model inventory for architecture-robustness experiments.
+# Revisions are immutable Hub commits observed 2026-09-24.  A model being
+# listed here does not imply that its weights are cached locally or that a
+# full QAT run fits the current two-card node.
+
+hardware:
+  node: two AMD Radeon RX 7900 XT (gfx1100)
+  usable_vram_bytes_per_card: 21458059264
+  usable_vram_gib_per_card: 19.98
+  measured_date: 2026-09-24
+
+defaults:
+  dtype: bfloat16
+  sequence_length: 512
+  batch_size: 2
+  target_group_size: 128
+  teacher: same_architecture_full_precision_self
+  metrics: [ppl_ratio, retention, delta_ppl, kl, lm_eval]
+
+models:
+  - id: Qwen/Qwen3-0.6B
+    revision: c1899de289a04d12100db370d81485cdf75e47ca
+    family: qwen3
+    architecture: Qwen3ForCausalLM
+    model_type: qwen3
+    parameters: 596M
+    weight_size_bf16: 4.5GB
+    target_profile: qwen3
+    status: control
+    local_fit: yes
+    notes: Existing ladder control; tied lm_head remains FP.
+
+  - id: Qwen/Qwen3-1.7B
+    revision: 70d244cc86ccca08cf5af4e1e306ecf908b1ad5e
+    family: qwen3
+    architecture: Qwen3ForCausalLM
+    model_type: qwen3
+    parameters: 1.7B
+    weight_size_bf16: 4.1GB
+    target_profile: qwen3
+    status: control
+    local_fit: yes
+    notes: Existing converged ladder rung; tied lm_head remains FP.
+
+  - id: Qwen/Qwen3-4B
+    revision: 1cfa9a7208912126459214e8b04321603b3df60c
+    family: qwen3
+    architecture: Qwen3ForCausalLM
+    model_type: qwen3
+    parameters: 4.0B
+    weight_size_bf16: 8.1GB
+    target_profile: qwen3
+    status: control
+    local_fit: yes
+    notes: Existing 4B scaling rung; student and teacher use separate cards.
+
+  # Qwen3.5 small series.  These share the 27B target's `qwen3_5` Gated-DeltaNet
+  # architecture and are the tractable stand-ins for the architecture port.
+  # Every entry below was verified with `inspect_model_targets.py` on the pinned
+  # revision: target_count_ok is true and the profile selects only the text
+  # decoder (the vision tower and in_proj_a/in_proj_b recurrent controls stay FP).
+  - id: Qwen/Qwen3.5-0.8B
+    revision: 2fc06364715b967f1860aea9cf38778875588b17
+    family: qwen3_5
+    architecture: Qwen3_5ForConditionalGeneration
+    model_type: qwen3_5
+    parameters: 853M
+    weight_size_bf16: 1.71GB
+    target_profile: qwen3_5
+    rotation_mode: input
+    status: architecture-smoke
+    local_fit: yes
+    notes: >-
+      Fastest qwen3_5 loader/forward smoke.  24 text layers (18 linear-attention
+      + 6 full-attention); selects 150/150 linears (0.497B params), lm_head tied
+      so it remains FP.  Input rotation widths 1024/2048/3584.
+
+  - id: Qwen/Qwen3.5-2B
+    revision: 15852e8c16360a2fea060d615a32b45270f8a8fc
+    family: qwen3_5
+    architecture: Qwen3_5ForConditionalGeneration
+    model_type: qwen3_5
+    parameters: 2.21B
+    weight_size_bf16: 4.43GB
+    target_profile: qwen3_5
+    rotation_mode: input
+    status: architecture-pilot
+    local_fit: yes
+    notes: >-
+      Primary qwen3_5 architecture stand-in.  24 text layers (18 Gated-DeltaNet
+      + 6 full-attention); selects 150/150 linears (1.372B params), lm_head tied.
+      Input rotation widths 2048/6144 (blocks 1024).  Student and teacher fit on
+      separate cards.
+
+  - id: Qwen/Qwen3.5-4B
+    revision: 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a
+    family: qwen3_5
+    architecture: Qwen3_5ForConditionalGeneration
+    model_type: qwen3_5
+    parameters: 4.54B
+    weight_size_bf16: 9.08GB
+    target_profile: qwen3_5
+    rotation_mode: input
+    status: architecture-scale-control
+    local_fit: yes
+    notes: >-
+      Same size as the legacy Qwen3 4B rung, so it is the matched-size qwen3_5
+      control.  32 text layers; selects 200/200 linears (3.565B params), lm_head
+      tied.  Use the 2B memory profile first; verify placement before a 20k run.
+
+  - id: Qwen/Qwen3.8-27B
+    revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
+    family: qwen3_5
+    architecture: Qwen3_5ForConditionalGeneration
+    model_type: qwen3_5
+    parameters: 27.8B
+    weight_size_bf16: 55.6GB
+    target_profile: qwen3_5
+    rotation_mode: input
+    signs_manifest: artifacts/oracle/bonsai27/hadamard-manifest.json
+    status: architecture-port
+    local_fit: no-full-resident
+    notes: >-
+      Hybrid Gated-DeltaNet/full-attention multimodal checkpoint.  The language
+      tower needs in_proj_qkv/in_proj_z/out_proj plus the usual attention/MLP
+      matrices; a 401-tensor, 25.598B-parameter target set is the Prism-aligned
+      scope.  Use a text-only extraction or block-wise/sharded runner; two 24GB
+      cards cannot hold a normal student+teacher pair.
+
+  - id: Qwen/Qwen3.8-27B-FP8
+    revision: 017b9c7af6b5689d5dd426a76e0bc077eb5ca20a
+    family: qwen3_5
+    architecture: Qwen3_5ForConditionalGeneration
+    model_type: qwen3_5
+    parameters: 27.8B
+    weight_size: 30.9GB_FP8
+    target_profile: qwen3_5
+    status: reference-only
+    local_fit: no
+    notes: Pre-quantized checkpoint; not a clean full-precision teacher for the QAT/KD recipe.
+
+  - id: Qwen/Qwen3.8-Flash-Next
+    revision: de4b8e4d43b917e7706784d8bb445c9af86a3540
+    family: qwen4_exp
+    architecture: Qwen4ExpForConditionalGeneration
+    model_type: qwen4_exp
+    parameters: 180B
+    weight_size_bf16: 360.1GB
+    target_profile: unsupported
+    status: deferred
+    local_fit: no
+    notes: New Qwen4 experimental MoE/vision/indexer architecture; later porting project.
+
+  - id: Qwen/Qwen3.8-Flash-Next-FP8
+    revision: 236dfdf285828023ca3bcd3f37366c58a3469b13
+    family: qwen4_exp
+    architecture: Qwen4ExpForConditionalGeneration
+    model_type: qwen4_exp
+    parameters: 180B
+    weight_size: 185.6GB_FP8
+    target_profile: unsupported
+    status: reference-only
+    local_fit: no
+    notes: Even FP8 is far beyond the local node; architecture is not supported by current code.
+
+  - id: Qwen/Qwen3.8-2.4T-A95B
+    revision: 207bd685a7e3696cfaff12ded7c6a7ea0f88c996
+    family: qwen3_5_moe
+    architecture: Qwen3_5MoeForCausalLM
+    model_type: qwen3_5_moe_text
+    parameters: 2.446T
+    weight_size_bf16: 4.89TB
+    target_profile: unsupported
+    status: deferred
+    local_fit: no
+    notes: 512-expert MoE; requires a separate expert-routing/training design.
+
+  - id: Qwen/Qwen3.8-2.4T-A95B-FP8
+    revision: d2dc35658bcf77e66643428cb52e774cc3b5bd29
+    family: qwen3_5_moe
+    architecture: Qwen3_5MoeForCausalLM
+    model_type: qwen3_5_moe_text
+    parameters: 2.446T
+    weight_size: 2.50TB_FP8
+    target_profile: unsupported
+    status: reference-only
+    local_fit: no
+    notes: Not a practical teacher or student for this node.
+
+  - id: HuggingFaceTB/SmolLM2-1.7B
+    revision: effd688a12921b4cc83e3312b6feb579f70f9c71
+    family: llama
+    architecture: LlamaForCausalLM
+    model_type: llama
+    parameters: 1.711B
+    weight_size_bf16: 3.42GB
+    target_profile: llama
+    status: first-cross-architecture-pilot
+    local_fit: yes
+    notes: Apache-2.0; clean BF16 checkpoint; immediate matched-size test.
+
+  - id: HuggingFaceTB/SmolLM2-360M
+    revision: f8027fd0eaeea54caa13c31d31b9fdc459c38b49
+    family: llama
+    architecture: LlamaForCausalLM
+    model_type: llama
+    parameters: 362M
+    weight_size_bf16: 0.72GB
+    target_profile: llama
+    status: smoke
+    local_fit: yes
+    notes: Fast loader/forward smoke test before spending on 1.7B.
+
+  - id: allenai/OLMo-2-0425-1B-Instruct
+    revision: 48d788eca847d4d7548f375ad03d3c9312f6139e
+    family: olmo2
+    architecture: Olmo2ForCausalLM
+    model_type: olmo2
+    parameters: 1.485B
+    weight_size_bf16: 2.97GB
+    target_profile: olmo2
+    status: cross-architecture-pilot
+    local_fit: yes
+    notes: Apache-2.0; untied lm_head is explicitly included by the profile.
+
+  - id: microsoft/Phi-3.5-mini-instruct
+    revision: 2fe192450127e6a83f7441aef6e3ca586c338b77
+    family: phi3
+    architecture: Phi3ForCausalLM
+    model_type: phi3
+    parameters: 3.821B
+    weight_size_bf16: 7.64GB
+    target_profile: phi3
+    status: fused-projection-pilot
+    local_fit: memory-smoke-first
+    notes: >-
+      MIT; qkv_proj/gate_up_proj are fused and must not be matched by Qwen
+      suffixes.  The 131K LongRoPE configuration is unnecessary for a 512-token
+      pilot; use the 4K sibling below for the first fused-projection run.
+
+  - id: microsoft/Phi-3-mini-4k-instruct
+    revision: f39ac1d28e925b323eae81227eaba4464caced4e
+    family: phi3
+    architecture: Phi3ForCausalLM
+    model_type: phi3
+    parameters: 3.821B
+    weight_size_bf16: 7.64GB
+    target_profile: phi3
+    status: preferred-fused-projection-pilot
+    local_fit: memory-smoke-first
+    notes: MIT; same fused projection geometry as Phi-3.5-mini without the long-context configuration.
+
+  - id: mistralai/Mistral-7B-v0.3
+    revision: caa1feb0e54d415e2df31207e5f4e273e33509b1
+    family: mistral
+    architecture: MistralForCausalLM
+    model_type: mistral
+    parameters: 7.248B
+    weight_size_bf16: 29.0GB
+    target_profile: mistral
+    status: deferred-memory
+    local_fit: no
+    notes: Standard projection names, but full student+teacher QAT exceeds the measured 20 GiB cards.
+
+  - id: EleutherAI/pythia-1.4b
+    revision: fedc38a16eea3bd36a96b906d78d11d2ce18ed79
+    family: gpt_neox
+    architecture: GPTNeoXForCausalLM
+    model_type: gpt_neox
+    parameters: 1.414B
+    weight_size_bf16: 2.93GB
+    target_profile: gpt_neox
+    status: name-stress-pilot
+    local_fit: yes
+    notes: Apache-2.0; query_key_value/dense names and untied embed_out exercise the profile.

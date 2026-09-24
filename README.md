@@ -1,8 +1,5 @@
 # bonsai-ternary-forensics
 
-
-# bonsai-ternary-forensics
-
 [![License](https://img.shields.io/github/license/sky-is-green/bonsai2-ternary-forensics?style=flat)](https://github.com/sky-is-green/bonsai2-ternary-forensics/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/Python-3776AB?style=flat&logo=python&logoColor=white)](https://github.com/sky-is-green/bonsai2-ternary-forensics)
 [![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=flat&logo=pytorch&logoColor=white)](https://github.com/sky-is-green/bonsai2-ternary-forensics)
@@ -53,13 +50,35 @@ scripts/gate3/           SCR noise test, 27B prefix Hessians, GPTQ sweep,
 scripts/pilot/           block-wise KD and data-selection pilot scripts
 scripts/eval_llama_server.py  standalone smoke / perplexity evaluation
 tests/ternary/           offline test suite (synthetic tensors; no downloads)
-docs/                    white paper, failure register, runtime notes
+docs/                    white paper, failure register, model registry,
+                         reproducibility audit, quantization landscape,
+                         prior art, DSpark track
 research/                Gate-1/2/3 write-ups
-configs/                 run configs
+configs/                 run configs, pinned model registry
 ```
 
 No weights or large artifacts are committed. The scripts expect data under
 `artifacts/` (gitignored).
+
+## Architecture robustness and reproducibility
+
+The original ladder is a **legacy Qwen3 canary**, not a complete Qwen3.8/Bonsai-2
+replication. Qwen3.8-27B is a hybrid `Qwen3_5ForConditionalGeneration` model
+with a different projection inventory. Before any cross-architecture run, use
+the config-only preflight and read the audit:
+
+- [`configs/model_registry.yaml`](configs/model_registry.yaml) — pinned model
+  inventory, architecture profiles, and local feasibility.
+- [`docs/MODEL-REGISTRY.md`](docs/MODEL-REGISTRY.md) — candidate ranking and
+  cross-architecture pilot order.
+- [`docs/REPRODUCIBILITY-AUDIT.md`](docs/REPRODUCIBILITY-AUDIT.md) — prioritized
+  gaps, acceptance criteria, and the cross-architecture pilot protocol.
+- `scripts/pilot/inspect_model_targets.py` — no-weight/no-GPU target census.
+- `scripts/pilot/run_cross_arch_pilot.sh` — explicit, preflighted pilot runner.
+
+The current Qwen3 ladder should be reported as **adaptive validation retention**.
+Do not call an in-memory STE result PQ2_0/Bonsai-2 parity until the packed
+quantizer/export and persistent-basis checks in the audit are complete.
 
 ## Install
 
@@ -71,6 +90,8 @@ pip install -e .
 
 The offline suite needs only numpy/pyyaml/pytest. The gate and pilot scripts
 need torch/transformers/datasets; on ROCm install torch from the ROCm index.
+Qwen3.5/Qwen3.8 cross-architecture runs require the `qwen35` extra (the
+recorded node uses Transformers 5.5.0).
 
 ## Reproduce
 
@@ -94,7 +115,9 @@ python -m bonsai_forensics.gate1_forensics \
 
 # Gate 2: swap all PQ2_0 payloads for rotate+RTN and evaluate
 python -m bonsai_forensics.gate2_rtn_artifact \
-    --gguf artifacts/oracle/bonsai27/Ternary-Bonsai-2-27B-PQ2_0.gguf \
+    --source artifacts/oracle/bonsai27/Ternary-Bonsai-2-27B-PQ2_0.gguf \
+    --dest artifacts/gate2/patched.gguf \
+    --manifest artifacts/oracle/bonsai27/hadamard-manifest.json \
     --base-dir artifacts/base27 --out artifacts/gate2/patch-report.json
 
 # Gate 3 diagnostics (see scripts/gate3/*.py for their arguments)

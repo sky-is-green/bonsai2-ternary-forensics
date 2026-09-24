@@ -32,6 +32,7 @@ Remember: run one heavy ROCm process at a time, and pin the device with
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -50,6 +51,17 @@ DEFAULT_PROMPTS = [
 ]
 
 PPL_RE = re.compile(r"Final estimate:\s*PPL\s*=\s*([0-9.eE+-]+)\s*(?:\+/?-\s*([0-9.eE+-]+))?")
+
+
+def _sha256(path: str) -> str | None:
+    try:
+        digest = hashlib.sha256()
+        with Path(path).open("rb") as handle:
+            while chunk := handle.read(1 << 20):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
 
 
 def _post_json(url: str, payload: dict, timeout: float = 600.0) -> dict:
@@ -147,6 +159,7 @@ def run_smoke(args: argparse.Namespace) -> dict:
         "mode": "smoke",
         "gguf": args.gguf,
         "server_bin": args.server_bin,
+        "server_bin_sha256": _sha256(args.server_bin),
         "ngl": args.ngl,
         "ctx": args.ctx,
         "no_thinking": args.no_thinking,
@@ -184,6 +197,7 @@ def run_perplexity(args: argparse.Namespace) -> dict:
         "mode": "perplexity",
         "gguf": args.gguf,
         "perplexity_bin": args.perplexity_bin,
+        "perplexity_bin_sha256": _sha256(args.perplexity_bin),
         "corpus": args.corpus,
         "ngl": args.ngl,
         "ctx": args.ctx,
@@ -204,7 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
     smoke.add_argument("--gguf", required=True)
     smoke.add_argument("--host", default="127.0.0.1")
     smoke.add_argument("--port", type=int, default=8090)
-    smoke.add_argument("--ngl", default=99, help="GPU layers (int) or 'all'")
+    smoke.add_argument("--ngl", default=0, help="GPU layers (int) or 'all'; default 0 is safe")
     smoke.add_argument("--ctx", type=int, default=4096)
     smoke.add_argument("--max-tokens", type=int, default=64)
     smoke.add_argument("--temperature", type=float, default=0.0)
@@ -213,6 +227,8 @@ def build_parser() -> argparse.ArgumentParser:
     smoke.add_argument("--startup-timeout", type=float, default=900.0)
     smoke.add_argument("--log", default="", help="server log path")
     smoke.add_argument("--extra", nargs=argparse.REMAINDER, default=[], help="extra flags passed to llama-server")
+    smoke.add_argument("--allow-partial", action="store_true",
+                       help="return zero even when prompts are empty/error responses")
     smoke.add_argument("--out", required=True)
     smoke.set_defaults(func=run_smoke)
 
@@ -220,7 +236,7 @@ def build_parser() -> argparse.ArgumentParser:
     ppl.add_argument("--perplexity-bin", required=True, help="path to llama-perplexity")
     ppl.add_argument("--gguf", required=True)
     ppl.add_argument("--corpus", required=True)
-    ppl.add_argument("--ngl", default=99, help="GPU layers (int) or 'all'")
+    ppl.add_argument("--ngl", default=0, help="GPU layers (int) or 'all'; default 0 is safe")
     ppl.add_argument("--ctx", type=int, default=512)
     ppl.add_argument("--chunks", type=int, default=8)
     ppl.add_argument("--timeout", type=float, default=3600.0)
@@ -239,6 +255,9 @@ def main(argv=None) -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(f"[eval] wrote {out}", flush=True)
+    if (result.get("mode") == "smoke" and result.get("failed", 0)
+            and not getattr(args, "allow_partial", False)):
+        return 2
     return 0
 
 

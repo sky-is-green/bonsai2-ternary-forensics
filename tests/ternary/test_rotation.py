@@ -255,6 +255,22 @@ def _write_sign_manifest(
     return path
 
 
+def test_sign_and_basis_digests_are_seed_and_width_specific() -> None:
+    a = rot.sign_digest(128, 1337)
+    assert a == rot.sign_digest(128, 1337)
+    assert a != rot.sign_digest(128, 2)
+    basis = rot.basis_digest((128, 256), 1337)
+    assert basis == rot.basis_digest((256, 128), 1337)
+    assert basis != rot.basis_digest((128,), 1337)
+
+
+def test_explicit_sign_digest_is_content_addressed() -> None:
+    signs = {"128": [np.ones(128), -np.ones(128)]}
+    assert rot.explicit_sign_digest(signs) == rot.explicit_sign_digest(dict(signs))
+    changed = {"128": [np.ones(128), np.ones(128)]}
+    assert rot.explicit_sign_digest(signs) != rot.explicit_sign_digest(changed)
+
+
 def test_load_sign_file_flat_and_2d(tmp_path: Path) -> None:
     rng = np.random.default_rng(10)
     flat = rng.choice(np.array([-1.0, 1.0]), size=5120)
@@ -408,3 +424,16 @@ def test_run_state_records_manifest_hash() -> None:
     state = rq.RunState(started_utc="2026-09-19T00:00:00Z",
                         signs_manifest_sha256="deadbeef")
     assert state.as_dict()["signs_manifest_sha256"] == "deadbeef"
+
+
+def test_unabsorb_inverts_absorb() -> None:
+    """`unabsorb_*` must exactly invert `absorb_*` (PQ2_0 export bridge)."""
+    rng = np.random.default_rng(0)
+    for width in (128, 256):
+        rotations = rot.rotations_for(width, 1337)
+        w_in = rng.standard_normal((7, width))
+        assert np.allclose(
+            rot.unabsorb_input(rot.absorb_input(w_in, rotations), rotations), w_in)
+        w_out = rng.standard_normal((width, 5))
+        assert np.allclose(
+            rot.unabsorb_output(rot.absorb_output(w_out, rotations), rotations), w_out)

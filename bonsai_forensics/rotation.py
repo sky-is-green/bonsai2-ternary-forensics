@@ -28,7 +28,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
-from typing import Mapping
+from typing import Iterable, Mapping
 
 import numpy as np
 
@@ -165,6 +165,42 @@ def rotation_matrix(signs: np.ndarray) -> np.ndarray:
     return hadamard(len(signs)) * signs[None, :]
 
 
+def sign_digest(d: int, seed: int, domain: str = DEFAULT_DOMAIN,
+                block: int | None = None) -> str:
+    """Return a stable digest of the PRF signs for one rotated width."""
+    rotations = rotations_for(d, seed, domain, block=block)
+    digest = hashlib.sha256()
+    digest.update(f"width={int(d)}|seed={int(seed)}|domain={domain}|blocks={len(rotations)}|".encode())
+    for signs in rotations:
+        digest.update(np.asarray(signs, dtype=np.int8).tobytes())
+    return digest.hexdigest()
+
+
+def basis_digest(widths: Iterable[int], seed: int, domain: str = DEFAULT_DOMAIN,
+                 block: int | None = None) -> str:
+    """Digest a complete set of width-specific PRF sign vectors."""
+    digest = hashlib.sha256()
+    for width in sorted(set(int(x) for x in widths)):
+        digest.update(str(width).encode())
+        digest.update(b"|")
+        digest.update(sign_digest(width, seed, domain, block).encode())
+        digest.update(b"|")
+    return digest.hexdigest()
+
+
+def explicit_sign_digest(sign_sets: Mapping[str, list[np.ndarray]]) -> str:
+    """Digest explicit per-width sign manifests independently of filenames."""
+    digest = hashlib.sha256()
+    for width in sorted((int(x) for x in sign_sets)):
+        rotations = sign_sets[str(width)] if str(width) in sign_sets else sign_sets[width]
+        digest.update(str(width).encode())
+        digest.update(b"|")
+        for signs in rotations:
+            digest.update(np.asarray(signs, dtype=np.int8).tobytes())
+        digest.update(b"|")
+    return digest.hexdigest()
+
+
 def materialize_rotation(d: int, seed: int, domain: str = DEFAULT_DOMAIN) -> np.ndarray:
     """Full block-diagonal `R_d` — test/analysis helper, O(d²) memory."""
     rots = rotations_for(d, seed, domain)
@@ -236,6 +272,33 @@ def absorb_output(w: np.ndarray, rotations: list[np.ndarray]) -> np.ndarray:
     for k, signs in enumerate(rotations):
         block = w[k * g : (k + 1) * g, :]
         out[k * g : (k + 1) * g, :] = _fwht(block * signs[:, None], axis=0) / math.sqrt(g)
+    return out
+
+
+def unabsorb_input(w: np.ndarray, rotations: list[np.ndarray]) -> np.ndarray:
+    """Inverse of `absorb_input`: `W = (W Rᵀ) R` — recover the primal weight.
+
+    Used by the PQ2_0 export bridge: an rmd-trained master is stored in the
+    absorbed basis (`W Rᵀ`), so it must be un-rotated before the canonical
+    exporter re-folds the norm and re-absorbs it.
+    """
+    w = np.asarray(w, dtype=np.float64)
+    g = len(rotations[0])
+    if w.shape[-1] != g * len(rotations):
+        raise ValueError(f"input axis {w.shape[-1]} does not match {len(rotations)} blocks of {g}")
+    return apply_rotation(w, rotations, transpose=True)
+
+
+def unabsorb_output(w: np.ndarray, rotations: list[np.ndarray]) -> np.ndarray:
+    """Inverse of `absorb_output`: `W = Rᵀ (R W)`."""
+    w = np.asarray(w, dtype=np.float64)
+    g = len(rotations[0])
+    if w.shape[0] != g * len(rotations):
+        raise ValueError(f"output axis {w.shape[0]} does not match {len(rotations)} blocks of {g}")
+    out = np.empty_like(w)
+    for k, signs in enumerate(rotations):
+        block = w[k * g : (k + 1) * g, :]
+        out[k * g : (k + 1) * g, :] = _fwht(block, axis=0) / math.sqrt(g) * signs[:, None]
     return out
 
 

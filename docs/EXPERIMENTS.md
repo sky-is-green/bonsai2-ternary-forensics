@@ -488,10 +488,13 @@ warmup first (higher LR is likely a slow-start problem, not a wrong direction).
 - **Ladder** runs 10000 steps per rung (the 5k point is logged for free, and the
   scaling trend may be length-dependent), 0.6B ∥ 1.7B then 4B.
 
-## Iso-convergence results (2026-09-23) — the level, on comparable rulers
+## Iso-convergence results (2026-09-23) — legacy ladder and screening metrics
 
-Closes the last ladder confound ([`RETENTION-VS-SCALE.md`](RETENTION-VS-SCALE.md))
-and answers the *level* question on rulers comparable to Prism's.
+These are completed legacy Qwen3 pilot observations, not a completed
+pre-registered scale result. The 4B rung is still required, and the primary
+WikiText teacher-PPL threshold in `SCALING-PROTOCOL.md` is not met by the two
+available rungs. The benchmark section below is a local screening proxy, not
+Prism's published ruler.
 
 ### Converged ladder (WikiText, 20k steps + managed decay, 8×8 holdout)
 
@@ -503,10 +506,12 @@ and answers the *level* question on rulers comparable to Prism's.
 Direction: retention rises with size (matches Prism). Level: 1.7B at 63.6% **PPL**
 retention — but PPL retention ≠ benchmark retention (below).
 
-### Benchmark retention — the same ruler Prism publishes
+### Benchmark retention — local screening proxy (not Prism-comparable)
 
 Minimal MC harness (`mc_bench.py`, 400 items × arc_easy / hellaswag / piqa), FP
-base vs the converged 1.7B checkpoint (step 17000):
+base vs the converged 1.7B checkpoint (step 17000). This is useful as a
+matched within-harness diagnostic, but it is not lm-eval and does not reproduce
+Prism's suite, prompts, versions, or uncertainty protocol:
 
 | | arc_easy | hellaswag | piqa | mean |
 |---|---|---|---|---|
@@ -514,9 +519,9 @@ base vs the converged 1.7B checkpoint (step 17000):
 | ternary | 46.8% | 38.5% | 58.0% | 47.8% |
 | retention | 68.8% | 87.5% | 79.5% | **77.5%** |
 
-77.5% benchmark retention at 1.7B — the same regime as Prism's own 1.7B (85–88%),
-and *higher* than our PPL retention (63.6%). The "PPL retention ≠ benchmark
-retention" caveat holds in our own numbers.
+77.5% is retention within this local proxy only. It must not be presented as a
+like-for-like Prism benchmark number. The "PPL retention ≠ benchmark retention"
+caveat still holds within the matched harness.
 
 ### Capability vs access — what the loss actually is (`mc_capability.py`)
 
@@ -530,17 +535,21 @@ had the gold as its *second* choice, and over half were near-ties — quantizati
 moved the decision boundary, it did not remove the knowledge. A single retention
 number hides this.
 
-### KLD — llama.cpp convention, vs the FP base
+### KLD — historical diagnostic, pending a clean rerun
+
+The following KLD numbers were produced by the old evaluator, which selected
+prefix chunks from the training corpus. They are retained as historical
+observations, **not** as held-out generalization or gate evidence:
 
 | | kld_mean | ppl_ratio | same_top_p |
 |---|---|---|---|
-| unconverged 1.7B | 0.9764 | 1.941 | 62.9% |
-| **converged 1.7B** | **0.7064** | **1.531** | **68.3%** |
-| Bonsai 27B (mrumhr, HF #54) | 0.3403 | 1.311 | 77.8% |
+| unconverged 1.7B (contaminated prefix) | 0.9764 | 1.941 | 62.9% |
+| **converged 1.7B (contaminated prefix)** | **0.7064** | **1.531** | **68.3%** |
+| Bonsai 27B (mrumhr, HF #54; reference) | 0.3403 | 1.311 | 77.8% |
 
-Iso-convergence cut KLD by 28%. Against the 2× gate (0.681) we are at **1.04×** —
-essentially at the gate, versus 1.4× before; 2.08× Bonsai instead of 2.87×. (This
-is a 1.7B against their 27B.)
+The evaluator now defaults to the checkpoint's locked `eval-regions.json` and
+records the selected token ranges; rerun the KLD report before using it in a
+claim. The old 0.7064 value must not be compared to the 0.681 gate.
 
 Scripts: `run_mc_bench.sh`, `mc_bench.py`, `mc_capability.py`, `kld_eval.py`.
 

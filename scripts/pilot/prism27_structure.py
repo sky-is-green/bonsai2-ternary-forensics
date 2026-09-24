@@ -28,9 +28,10 @@ from bonsai_forensics.oracle import (  # noqa: E402
     parse_gguf_table,
 )
 
-GGUF = Path(
-    "/home/penis/.cache/huggingface/hub/models--prism-ml--Ternary-Bonsai-2-27B-gguf/"
-    "snapshots/6ed5e12bf84b7a63069882c91dd9e9218647d17b/Ternary-Bonsai-2-27B-PQ2_0.gguf"
+GGUF = (
+    Path.home()
+    / ".cache/huggingface/hub/models--prism-ml--Ternary-Bonsai-2-27B-gguf"
+    / "snapshots/6ed5e12bf84b7a63069882c91dd9e9218647d17b/Ternary-Bonsai-2-27B-PQ2_0.gguf"
 )
 
 

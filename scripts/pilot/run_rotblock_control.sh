@@ -11,11 +11,11 @@
 #
 # Waits for the in-flight 4B ladder rung to finish, then runs on the
 # monitor-less card (HIP index 1 = sysfs card0).
-set -u
+set -uo pipefail
 cd "$(dirname "$0")/../.."
 PY=${PY:-$HOME/.unsloth/studio/unsloth_studio/bin/python}
-CORPUS=$HOME/Desktop/work/hivebench/artifacts/ternary/canary/tinyshakespeare.txt
-CANARY=$HOME/Desktop/work/hivebench/artifacts/ternary/canary/hf
+CORPUS=${CORPUS:-artifacts/ternary/canary/tinyshakespeare.txt}
+CANARY=${CANARY:-Qwen/Qwen3-1.7B}
 OUT=ste-rotate-10k-block512
 
 LOCK=/tmp/opencode/rotblock.lock
@@ -27,11 +27,16 @@ echo "[block512] waiting for the 4B rung $(date +%H:%M:%S)"
 while pgrep -f "rmd_kd.py.*ladder-4B" >/dev/null; do sleep 60; done
 echo "[block512] 4B clear; starting $OUT $(date +%H:%M:%S)"
 
-HIP_VISIBLE_DEVICES=1 $PY scripts/pilot/rmd_kd.py \
-  --model-dir "$CANARY" --corpus "$CORPUS" \
-  --ste --rotate --rot-block 512 --update adafactor --lam 0 --q 8 \
-  --steps 10000 --seq 512 --batch 2 --lr 5e-5 --temp 2.0 \
-  --eval-windows 8 --eval-regions 8 --project-every 500 --log-every 500 \
-  --save-best --device cuda:0 --teacher-device cuda:0 --seed 1337 \
-  --out "artifacts/rmd/$OUT" > "artifacts/rmd/$OUT.log" 2>&1
-echo "[block512] exit code=$? $(date +%H:%M:%S)"
+if HIP_VISIBLE_DEVICES=1 $PY scripts/pilot/rmd_kd.py \
+    --model-dir "$CANARY" --corpus "$CORPUS" \
+    --ste --rotate --rot-block 512 --update adafactor --lam 0 --q 8 \
+    --steps 10000 --seq 512 --batch 2 --lr 5e-5 --temp 2.0 \
+    --eval-windows 8 --eval-regions 8 --project-every 500 --log-every 500 \
+    --save-best --device cuda:0 --teacher-device cuda:0 --seed 1337 \
+    --out "artifacts/rmd/$OUT" > "artifacts/rmd/$OUT.log" 2>&1; then
+  code=0
+else
+  code=$?
+fi
+echo "[block512] exit code=$code $(date +%H:%M:%S)"
+exit "$code"

@@ -1,11 +1,10 @@
-"""Minimal multiple-choice benchmark — accuracy retention, Prism's ruler.
+"""Minimal multiple-choice benchmark — a screening proxy, not Prism's ruler.
 
-Prism's published retention is *benchmark accuracy* (quantized / FP16), not a
-PPL ratio. To compare our recipe on the same ruler we need an accuracy number,
-so this runs a few standard MC tasks and reports accuracy. The absolute numbers
-are a light harness (not lm-eval), but retention = quantized/FP uses the *same*
-harness for both arms, so the ratio is meaningful even where the absolute score
-is not.
+Prism publishes benchmark retention, but this lightweight ARC/HellaSwag/PIQA
+harness is not lm-eval and does not reproduce Prism's exact suite, prompts,
+versions, or uncertainty protocol.  It is useful for a matched FP-vs-student
+diagnostic when both arms use this same harness; do not label its ratio as a
+like-for-like Prism comparison.
 
 Tasks are context+continuation scored by mean log-prob of the continuation:
   arc_easy   allenai/ai2_arc (ARC-Easy)
@@ -26,9 +25,12 @@ import torch
 import torch.nn.functional as F
 
 HB = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(HB / "scripts" / "pilot"))
+sys.path.insert(0, str(HB))
 
-from rmd_kd import wrap_rotated  # noqa: E402
+from bonsai_forensics.modeling import load_text_causal_lm  # noqa: E402
+from bonsai_forensics.rotation import load_sign_manifest  # noqa: E402
+from bonsai_forensics.targets import infer_profile  # noqa: E402
+from scripts.pilot.rmd_kd import wrap_rotated  # noqa: E402
 
 
 def load_task(name: str, limit: int | None):
@@ -90,9 +92,16 @@ def evaluate(model, tok, task: str, rows, device) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model-dir", required=True)
+    ap.add_argument("--model-revision", default=None)
     ap.add_argument("--checkpoint", default=None,
                     help="optional rmd_kd student.pt; loads the rotated ternary model")
     ap.add_argument("--rot-block", type=int, default=None)
+    ap.add_argument("--rot-seed", type=int, default=None)
+    ap.add_argument("--target-profile", default=None)
+    ap.add_argument("--target-suffixes", default=None)
+    ap.add_argument("--include-lm-head", action=argparse.BooleanOptionalAction, default=None)
+    ap.add_argument("--rotation-mode", choices=("residual", "input"), default=None)
+    ap.add_argument("--signs-manifest", default=None)
     ap.add_argument("--seed", type=int, default=1337)
     ap.add_argument("--tasks", nargs="+", default=["arc_easy", "hellaswag", "piqa"])
     ap.add_argument("--limit", type=int, default=400)
@@ -100,16 +109,43 @@ def main() -> int:
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
 
     device = torch.device(args.device)
-    tok = AutoTokenizer.from_pretrained(args.model_dir)
-    model = AutoModelForCausalLM.from_pretrained(args.model_dir, dtype=torch.bfloat16).to(device)
+    payload = None
+    checkpoint_config = {}
+    checkpoint_manifest = {}
     if args.checkpoint:
-        wrap_rotated(model, seed=args.seed, ste=True, learn_scale=False, block=args.rot_block)
         payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+        checkpoint_config = dict(payload.get("config") or {})
+        checkpoint_manifest = payload.get("manifest") or {}
+    revision = args.model_revision or checkpoint_manifest.get("model", {}).get("revision")
+    tok = AutoTokenizer.from_pretrained(args.model_dir, revision=revision)
+    model = load_text_causal_lm(
+        args.model_dir, revision=revision, dtype=torch.bfloat16, device=device)
+    if payload is not None:
+        profile = infer_profile(
+            model, args.target_profile or checkpoint_config.get("target_profile", "auto"))
+        suffix_value = (args.target_suffixes if args.target_suffixes is not None
+                        else checkpoint_config.get("target_suffixes"))
+        suffixes = tuple(s.strip() for s in suffix_value.split(",") if s.strip()) if suffix_value else None
+        include_head = (args.include_lm_head if args.include_lm_head is not None
+                        else checkpoint_config.get("include_lm_head"))
+        rotation_mode = args.rotation_mode or checkpoint_config.get("rotation_mode", "residual")
+        rot_seed = args.rot_seed if args.rot_seed is not None else checkpoint_config.get("rot_seed")
+        if rot_seed is None or (not checkpoint_manifest and rot_seed == 0):
+            # Legacy checkpoints stored parser default 0, which meant "follow
+            # seed" in the original runner.
+            rot_seed = checkpoint_config.get("seed", args.seed)
+        block = args.rot_block if args.rot_block is not None else checkpoint_config.get("rot_block")
+        signs_path = args.signs_manifest or checkpoint_config.get("signs_manifest")
+        wrap_rotated(
+            model, seed=int(rot_seed), ste=True, learn_scale=False, block=block,
+            suffixes=suffixes, profile=profile, include_lm_head=include_head,
+            rotation_mode=rotation_mode,
+            sign_sets=load_sign_manifest(signs_path) if signs_path else None)
         model.load_state_dict(payload["state"], strict=False)
-        print(f"[mc] loaded checkpoint step={payload.get('step')} (rotated, STE ternary)")
+        print(f"[mc] loaded checkpoint step={payload.get('step')} (manifest recipe)")
     model.eval()
 
     results = []
@@ -121,7 +157,16 @@ def main() -> int:
 
     report = {
         "model_dir": args.model_dir,
+        "model_revision": revision,
         "checkpoint": args.checkpoint,
+        "checkpoint_manifest_present": bool(checkpoint_manifest),
+        "harness": "arc_easy+hellaswag+piqa-screening-proxy",
+        "datasets": {
+            "arc_easy": {"path": "allenai/ai2_arc", "config": "ARC-Easy", "split": "test"},
+            "hellaswag": {"path": "Rowan/hellaswag", "split": "validation"},
+            "piqa": {"path": "lighteval/piqa", "config": "plain_text", "split": "validation"},
+        },
+        "comparable_to_prism": False,
         "limit": args.limit,
         "tasks": results,
         "mean_acc": sum(r["acc"] for r in results) / len(results),

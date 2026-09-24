@@ -8,9 +8,12 @@
 # 4B needs student and teacher on *separate* cards. Spec block 512 is automatic
 # for its widths (2560, 9728 -> 2^v2 = 512), so no --rot-block override. Same
 # recipe, corpus, seed, eval set and managed-decay schedule as the other rungs.
-set -u
+set -uo pipefail
 cd "$(dirname "$0")/../.."
 PY=${PY:-$HOME/.unsloth/studio/unsloth_studio/bin/python}
+# The 4B student is close to the 20 GiB card limit.  The ROCm allocator used
+# here does not support expandable_segments, so memory safety is handled by
+# explicit cache release/logging in rmd_kd.py rather than an ineffective flag.
 CORPUS=artifacts/ternary/pilot/wikitext_3000.txt
 MODEL=${MODEL:-Qwen/Qwen3-4B}
 STEPS=${STEPS:-20000}
@@ -21,13 +24,23 @@ COMMON="--corpus $CORPUS --ste --rotate --update adafactor --lam 0 --q 8 \
 --eval-windows 8 --eval-regions 8 --project-every 500 --log-every 500 \
 --save-best --seed 1337 $DECAY"
 
+OUT=artifacts/rmd/wiki-conv-4B
 LOCK=/tmp/opencode/wiki-conv-4b.lock
 mkdir -p /tmp/opencode
+if [[ -e "$OUT" || -e "$OUT.log" ]]; then
+  echo "refusing existing output: $OUT (rename or remove it first)" >&2
+  exit 2
+fi
 if ! mkdir "$LOCK" 2>/dev/null; then echo "already running ($LOCK)"; exit 1; fi
 trap 'rmdir "$LOCK"' EXIT
 
 echo "[wiki4b] start model=$MODEL steps=$STEPS $(date +%H:%M:%S)"
-HIP_VISIBLE_DEVICES=0,1 $PY scripts/pilot/rmd_kd.py $COMMON \
-  --model-dir "$MODEL" --device cuda:0 --teacher-device cuda:1 \
-  --out artifacts/rmd/wiki-conv-4B > artifacts/rmd/wiki-conv-4B.log 2>&1
-echo "[wiki4b] exit code=$? $(date +%H:%M:%S)"
+if HIP_VISIBLE_DEVICES=0,1 $PY scripts/pilot/rmd_kd.py $COMMON \
+    --model-dir "$MODEL" --device cuda:0 --teacher-device cuda:1 \
+    --out "$OUT" > "$OUT.log" 2>&1; then
+  code=0
+else
+  code=$?
+fi
+echo "[wiki4b] exit code=$code $(date +%H:%M:%S)"
+exit "$code"

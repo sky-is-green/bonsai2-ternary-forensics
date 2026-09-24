@@ -25,9 +25,10 @@ sys.path.insert(0, str(HB))
 GROUP = 128
 SUFFIXES = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
 
-PRISM = Path(
-    "/home/penis/.cache/huggingface/hub/models--prism-ml--Ternary-Bonsai-1.7B-unpacked/"
-    "snapshots/3aca840085293d026ce6f6b80fafdae937fd2eeb/model.safetensors"
+PRISM = (
+    Path.home()
+    / ".cache/huggingface/hub/models--prism-ml--Ternary-Bonsai-1.7B-unpacked"
+    / "snapshots/3aca840085293d026ce6f6b80fafdae937fd2eeb/model.safetensors"
 )
 
 

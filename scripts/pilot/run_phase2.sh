@@ -1,9 +1,9 @@
 #!/bin/bash
 set -u
-cd ~/Desktop/work/bonsai-ternary-forensics
+cd "$(dirname "$0")/../.."
 PY=~/.unsloth/studio/unsloth_studio/bin/python
-MODEL=~/Desktop/work/hivebench/artifacts/ternary/canary/hf
-CORPUS=~/Desktop/work/hivebench/artifacts/ternary/canary/tinyshakespeare.txt
+MODEL=${MODEL:-Qwen/Qwen3-1.7B}
+CORPUS=${CORPUS:-artifacts/ternary/canary/tinyshakespeare.txt}
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # Phase 2: push the winning axes (rotation, q16, larger shell).

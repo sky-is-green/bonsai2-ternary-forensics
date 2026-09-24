@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from bonsai_forensics import margin  # noqa: E402
 from bonsai_forensics.quant import quantize_rtn_absmean  # noqa: E402
 from bonsai_forensics.recover import GROUP, TARGET_SUFFIXES  # noqa: E402
+from bonsai_forensics.rotation import load_sign_manifest  # noqa: E402
 
 RMD_PATH = Path(__file__).resolve().parent / "rmd_kd.py"
 
@@ -79,10 +80,24 @@ def load_student(args, model_dir: str, device: torch.device):
         from transformers import AutoModelForCausalLM
 
         model = AutoModelForCausalLM.from_pretrained(model_dir, dtype=torch.bfloat16)
-        rot_seed = cfg.get("rot_seed") or cfg.get("seed", 1337)
+        rot_seed = cfg.get("rot_seed") if cfg.get("rot_seed") is not None else cfg.get("seed", 1337)
+        profile = args.target_profile or cfg.get("target_profile", "auto")
+        suffix_value = (args.target_suffixes if args.target_suffixes is not None
+                        else cfg.get("target_suffixes"))
+        suffixes = (tuple(s.strip() for s in suffix_value.split(",") if s.strip())
+                    if suffix_value else None)
+        include_head = (args.include_lm_head if args.include_lm_head is not None
+                        else cfg.get("include_lm_head"))
+        rotation_mode = args.rotation_mode or cfg.get("rotation_mode", "residual")
+        block = args.rot_block if args.rot_block is not None else cfg.get("rot_block")
+        signs_path = args.signs_manifest or cfg.get("signs_manifest")
+        sign_sets = load_sign_manifest(signs_path) if signs_path else None
         rmd.wrap_rotated(model, rot_seed,
                          ste=bool(cfg.get("ste", True)),
-                         learn_scale=bool(cfg.get("learn_scale", False)))
+                         learn_scale=bool(cfg.get("learn_scale", False)),
+                         block=block, suffixes=suffixes, profile=profile,
+                         include_lm_head=include_head, rotation_mode=rotation_mode,
+                         sign_sets=sign_sets)
         missing, unexpected = model.load_state_dict(ckpt["state"], strict=False)
         if missing or unexpected:
             raise SystemExit(f"checkpoint mismatch: missing={missing[:4]} unexpected={unexpected[:4]}")
@@ -95,7 +110,16 @@ def load_student(args, model_dir: str, device: torch.device):
     model = AutoModelForCausalLM.from_pretrained(model_dir, dtype=torch.bfloat16)
     if args.student_init == "rotated":
         rmd = _import_rmd()
-        rmd.wrap_rotated(model, args.rot_seed or args.seed, ste=True)
+        rot_seed = args.rot_seed if args.rot_seed is not None else args.seed
+        suffixes = (tuple(s.strip() for s in args.target_suffixes.split(",") if s.strip())
+                    if args.target_suffixes else None)
+        sign_sets = load_sign_manifest(args.signs_manifest) if args.signs_manifest else None
+        rmd.wrap_rotated(model, rot_seed, ste=True,
+                         suffixes=suffixes,
+                         profile=args.target_profile or "auto",
+                         include_lm_head=args.include_lm_head,
+                         rotation_mode=args.rotation_mode or "residual",
+                         block=args.rot_block, sign_sets=sign_sets)
         return model.to(device).eval(), "init: rotated + STE ternary (untrained)"
     if args.student_init == "rtn":
         _apply_rtn(model, model.dtype)
@@ -115,7 +139,13 @@ def main(argv=None) -> int:
     ap.add_argument("--decisive-quantile", type=float, default=0.9)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--seed", type=int, default=1337)
-    ap.add_argument("--rot-seed", type=int, default=0)
+    ap.add_argument("--rot-seed", type=int, default=None)
+    ap.add_argument("--target-profile", default=None)
+    ap.add_argument("--target-suffixes", default=None)
+    ap.add_argument("--rotation-mode", default=None)
+    ap.add_argument("--rot-block", type=int, default=None)
+    ap.add_argument("--signs-manifest", default=None)
+    ap.add_argument("--include-lm-head", action=argparse.BooleanOptionalAction, default=None)
     ap.add_argument("--out", default="")
     args = ap.parse_args(argv)
 

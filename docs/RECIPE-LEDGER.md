@@ -6,6 +6,15 @@ re-deriving, and so the remaining gaps are explicit. Every number is the deploye
 metric (`--ste`, ternary forward in the loop), best `projected_ratio` per run,
 `retention = 100 / ratio`.
 
+**Scope warning (2026-09-24):** the ladder and most rows below are the legacy
+Qwen3-1.7B canary. Qwen3.8-27B is a hybrid `qwen3_5` model with a different
+projection inventory and is not covered by these rows. Architecture selection,
+rotation/export parity, provenance, and the cross-architecture protocol are
+tracked in [`REPRODUCIBILITY-AUDIT.md`](REPRODUCIBILITY-AUDIT.md) and
+[`../configs/model_registry.yaml`](../configs/model_registry.yaml). Gate/T29
+and private-project numbers elsewhere in this ledger are historical references;
+their large artifacts are not all present in this public checkout.
+
 Corpus matters enormously: shakespeare runs flatter (86–90%), WikiText is honest
 (51.9–63.6%). Read the corpus column before the number.
 

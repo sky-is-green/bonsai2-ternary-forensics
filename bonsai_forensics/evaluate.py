@@ -171,19 +171,22 @@ def result_markdown(result: dict, title: str = "Multi-region evaluation") -> str
     return "\n".join(lines) + "\n"
 
 
-def load_checkpoint(model_dir: str, checkpoint: str, device, *, scale: str = "absmean"):
+def load_checkpoint(model_dir: str, checkpoint: str, device, *, scale: str = "absmean",
+                    profile=None, suffixes=None, include_lm_head=None):
     """Load a `recover.py` `student.pt` into the ternary-wrapped base model.
 
     The checkpoint stores master weights only; the deployed forward is the
-    deterministic STE, so re-wrapping with the same `scale` reproduces the
-    trained model exactly.
+    deterministic STE, so re-wrapping with the same `scale`, `profile`, and
+    suffix/head policy reproduces the trained model exactly.  ``profile`` is
+    required for any non-Qwen3 checkpoint (fused/Gated-DeltaNet projections).
     """
-    from transformers import AutoModelForCausalLM
+    from bonsai_forensics.modeling import load_text_causal_lm
 
     from bonsai_forensics.recover import wrap_ternary
 
-    model = AutoModelForCausalLM.from_pretrained(model_dir, dtype=torch.bfloat16)
-    wrap_ternary(model, scale=scale)
+    model = load_text_causal_lm(model_dir, dtype=torch.bfloat16)
+    wrap_ternary(model, suffixes=suffixes, scale=scale,
+                 profile=profile, include_lm_head=include_lm_head)
     payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
     model.load_state_dict(payload["state"])
     return model.to(device)

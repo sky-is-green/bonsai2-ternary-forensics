@@ -1,13 +1,13 @@
 #!/bin/bash
-set -u
-cd ~/Desktop/work/bonsai-ternary-forensics
-PY=~/.unsloth/studio/unsloth_studio/bin/python
-MODEL=~/Desktop/work/hivebench/artifacts/ternary/canary/hf
-CORPUS=~/Desktop/work/hivebench/artifacts/ternary/canary/tinyshakespeare.txt
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-
+set -uo pipefail
+cd "$(dirname "$0")/../.."
+PY=${PY:-$HOME/.unsloth/studio/unsloth_studio/bin/python}
+MODEL=${MODEL:-Qwen/Qwen3-1.7B}
+CORPUS=${CORPUS:-artifacts/ternary/canary/tinyshakespeare.txt}
 # NOTE: two heavy ROCm processes at once violates the handoff's
 # firmware-hang rule. Owner decision: cards bench-PASSed, proceeding.
+# expandable_segments is NOT supported by this ROCm/PyTorch build (it is not
+# used as the OOM mitigation); the flag is deliberately not set here.
 
 echo "=== P1 GPU1: honest full AP trajectory (A pre-snap cost + B post-snap quality) ==="
 $PY scripts/pilot/rmd_kd.py --model-dir "$MODEL" --corpus "$CORPUS" \
@@ -24,8 +24,10 @@ $PY scripts/pilot/rmd_kd.py --model-dir "$MODEL" --corpus "$CORPUS" \
   --teacher-device cuda:0 --device cuda:0 \
   > artifacts/rmd/md-q8-lam0-s2.6e-8.log 2>&1 &
 P1B=$!
-wait $P1A $P1B
-echo "P1 done: ap-full=$? md-retest=$?"
+status=0
+wait $P1A || status=$?
+wait $P1B || status=$?
+echo "P1 done status=$status"
 
 echo "=== P2 GPU1: gate 0.2 + tern attractor (candidate 2) ==="
 $PY scripts/pilot/rmd_kd.py --model-dir "$MODEL" --corpus "$CORPUS" \
@@ -42,7 +44,9 @@ $PY scripts/pilot/rmd_kd.py --model-dir "$MODEL" --corpus "$CORPUS" \
   --teacher-device cuda:0 --device cuda:0 \
   > artifacts/rmd/rotate-lam0.log 2>&1 &
 P2B=$!
-wait $P2A $P2B
-echo "P2 done: gate=$? rotate=$?"
+wait $P2A || status=$?
+wait $P2B || status=$?
+echo "P2 done status=$status"
 
-echo "DUAL QUEUE DONE"
+echo "DUAL QUEUE DONE status=$status"
+exit "$status"

@@ -79,6 +79,13 @@ Only these receive the forward transform. Everything else — norms, the
 linear-attention recurrent state path, conv1d — is outside it, matching the
 ~0.0976% held above ternary in Prism's own README.
 
+**Runner boundary (2026-09-24):** the 401-tensor table is the exact
+Bonsai-2/Qwen3.5 *format* inventory, not a claim that the legacy
+`rmd_kd.py` edge-local wrapper already implements the persistent basis. The
+architecture profile now checks this 401-linear count, but embedding/norm
+folding, explicit signs, and packed export parity remain separate acceptance
+gates in [`REPRODUCIBILITY-AUDIT.md`](REPRODUCIBILITY-AUDIT.md).
+
 ## Zero-state structure of the released 27B (2026-09-23)
 
 Decoding the released `Ternary-Bonsai-2-27B-PQ2_0.gguf` gives the deployed code

@@ -1,6 +1,8 @@
 # Scaling protocol — does our recipe scale like Prism's?
 
-Status: **design note, 2026-09-23. Not yet run.**
+Status: **primary ladder in progress (2026-09-24).** The 0.6B and 1.7B
+WikiText rungs are complete; the 4B rung is running. The cross-architecture
+robustness extension is specified in [`REPRODUCIBILITY-AUDIT.md`](REPRODUCIBILITY-AUDIT.md).
 Companion: [`RETENTION-VS-SCALE.md`](RETENTION-VS-SCALE.md) (the ladder results
 and the confounds this protocol removes).
 
@@ -46,7 +48,8 @@ Four confounds, worst first:
   is not corpus-specific.
 - **Holdout:** 8 disjoint regions excluded from training via the existing
   `load_windows` path — verified against the F11 leak (train windows = total −
-  regions×windows, exactly).
+  regions×windows, exactly). Treat this as adaptive validation; freeze a
+  separate test split before making a final claim.
 
 ### 2. Metric
 Report all three and read the **trend across rungs**, never a single value:
@@ -90,12 +93,13 @@ Fixed before any run:
 Either outcome is reportable. The point of pre-registering is that neither can be
 spun after the fact.
 
-**Status (2026-09-23):** the first two rungs satisfy the rule on the primary
-corpus at iso-convergence — 0.6B **51.9%** < 1.7B **63.6%** (WikiText, 20k +
-managed decay; ΔPPL 24.5 → 12.1 agrees). The **4B** rung is running
-(`run_wiki_convergence_4B.sh`); the rule is not fully met until it lands. See
-[`EXPERIMENTS.md`](EXPERIMENTS.md) for the benchmark-retention, capability/access
-and KLD results at the converged 1.7B.
+**Status (2026-09-24):** the first two rungs show the expected direction at
+iso-convergence — 0.6B **51.9%** < 1.7B **63.6%** (WikiText, 20k + managed
+decay; ΔPPL 24.5 → 12.1 agrees) — but the primary-corpus teacher-PPL threshold
+is not met and the **4B** rung is still running
+(`run_wiki_convergence_4B.sh`). The rule is not fully met until that run lands.
+See [`EXPERIMENTS.md`](EXPERIMENTS.md) for the benchmark-retention,
+capability/access and KLD results, with their current validity caveats.
 
 ### 8. Controls
 - **block:** 1.7B@512 (`ste-rotate-10k-block512`) — settles confound 3
@@ -121,3 +125,25 @@ phase parallel.
   in the same direction.
 - It does not fix the deeper issue that our canary corpus is small: an
   in-distribution corpus fixes the *measurement*, not the data budget.
+
+## 10. Cross-architecture extension (added 2026-09-24)
+
+The size ladder is a Qwen3-family result, not evidence that the recipe is
+architecture-agnostic. The extension is deliberately separate:
+
+1. **Preflight (no weights):** run `scripts/pilot/inspect_model_targets.py` for
+   the pinned model in `configs/model_registry.yaml`; record architecture,
+   target coverage, effective rotation widths/blocks, and expected tensor count.
+2. **Smoke:** run a small clean checkpoint (SmolLM2-360M or SmolLM2-1.7B) for
+   500–1,000 updates to catch loader, fused-projection, and checkpoint issues.
+3. **Matched convergence:** run SmolLM2-1.7B, OLMo-2-1B, Pythia-1.4B, and
+   Phi-3.5-mini with the same corpus, token/update budget, fixed rotation seed,
+   KD temperature, and managed schedule. Use teacher-relative metrics, not raw
+   cross-tokenizer PPL.
+4. **Qwen3.8 separately:** treat `Qwen/Qwen3.8-27B` as an architecture-port
+   project. Its hybrid `qwen3_5` target has 401 linear tensors plus the
+   separately handled embedding; it is not a drop-in 27B invocation of the
+   legacy Qwen3 canary. Flash-Next and 2.4T-A95B are deferred.
+
+The runner writes a manifest and target census, but the audit's P0 export and
+persistent-basis gates remain prerequisites for a Bonsai-2 parity claim.

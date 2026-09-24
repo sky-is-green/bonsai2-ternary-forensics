@@ -21,6 +21,9 @@ gpu = [
     "transformers>=4.40",
     "datasets>=2.18",
 ]
+qwen35 = [
+    "transformers>=5.5.0",
+]
 test = ["pytest>=8.0"]
 
 [tool.setuptools.packages.find]

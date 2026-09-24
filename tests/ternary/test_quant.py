@@ -165,3 +165,22 @@ def test_bad_inputs() -> None:
         q.quantize(np.zeros(4), group_size=0)
     with pytest.raises(ValueError):
         q.quantize(np.zeros(4), refine_iters=-1)
+
+
+def test_pq2_0_quantizer_is_unrefined_absmean_rtn() -> None:
+    """The Bonsai-2-class quantizer is plain absmean RTN at g128 (Gate 1).
+
+    Gate 1 forensics show the LS-refined spec quantizer moves trits away from
+    Prism's released PQ2_0 codes; the PQ2_0-class path must therefore be the
+    unrefined absmean quantizer.
+    """
+    rng = np.random.default_rng(0)
+    w = rng.standard_normal((4, 256)) * rng.uniform(0.5, 2.0, size=(4, 1))
+    a = q.quantize_pq2_0(w)
+    b = q.quantize_rtn_absmean(w, q.PQ2_0_GROUP)
+    assert q.PQ2_0_GROUP == 128
+    assert np.array_equal(a.codes, b.codes)
+    assert np.allclose(a.scales, b.scales)
+    # Equals the spec quantizer with refinement disabled.
+    c = q.quantize(w, group_size=q.PQ2_0_GROUP, refine_iters=0)
+    assert np.array_equal(a.codes[..., : w.shape[-1]], c.codes[..., : w.shape[-1]])

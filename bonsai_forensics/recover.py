@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +40,7 @@ import numpy as np
 import torch
 
 from bonsai_forensics import canary
+from bonsai_forensics.provenance import build_manifest, write_manifest
 
 GROUP = 128
 TARGET_SUFFIXES = (
@@ -75,30 +77,49 @@ def ternary_ste(w: torch.Tensor, group: int = GROUP, scale: str = "absmean") -> 
 class TernaryLinear(torch.nn.Module):
     """nn.Linear whose weight is quantized with an STE during the forward."""
 
-    def __init__(self, base: torch.nn.Linear, *, scale: str = "absmean") -> None:
+    def __init__(self, base: torch.nn.Linear, *, scale: str = "absmean",
+                 group: int = GROUP) -> None:
         super().__init__()
         self.weight = torch.nn.Parameter(base.weight.detach().clone())
         self.bias = base.bias
         self.in_features = base.in_features
         self.out_features = base.out_features
         self.scale = scale
+        self.group = int(group)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.nn.functional.linear(x, ternary_ste(self.weight, scale=self.scale), self.bias)
+        return torch.nn.functional.linear(
+            x, ternary_ste(self.weight, group=self.group, scale=self.scale), self.bias)
 
 
-def wrap_ternary(model: torch.nn.Module, suffixes: tuple[str, ...] = TARGET_SUFFIXES,
-                 *, scale: str = "absmean") -> int:
-    """Replace matching `nn.Linear` modules in place; returns the count."""
+def wrap_ternary(model: torch.nn.Module, suffixes: tuple[str, ...] | None = None,
+                 *, scale: str = "absmean", group: int = GROUP,
+                 profile=None, include_lm_head=None) -> int:
+    """Replace matching ``nn.Linear`` modules in place; returns the count.
+
+    ``profile`` enables architecture-aware selection (including Qwen3.5's
+    fused/Gated-DeltaNet projections).  When ``profile`` is None the legacy
+    suffix-only path is used, defaulting to ``TARGET_SUFFIXES``; when a profile
+    is given, ``suffixes`` defaults to None so it does not silently override the
+    profile's vocabulary.
+    """
+    if profile is None:
+        legacy_suffixes = TARGET_SUFFIXES if suffixes is None else suffixes
+        selected = [
+            (name, module)
+            for name, module in model.named_modules()
+            if isinstance(module, torch.nn.Linear) and name.endswith(legacy_suffixes)
+        ]
+    else:
+        from bonsai_forensics.targets import select_target_linears
+        selected = select_target_linears(
+            model, profile=profile, include_lm_head=include_lm_head,
+            suffixes=suffixes)
     replaced = 0
-    for name, module in list(model.named_modules()):
-        if not isinstance(module, torch.nn.Linear):
-            continue
-        if not name.endswith(suffixes):
-            continue
+    for name, module in selected:
         parent_name, _, child = name.rpartition(".")
         parent = model.get_submodule(parent_name) if parent_name else model
-        setattr(parent, child, TernaryLinear(module, scale=scale))
+        setattr(parent, child, TernaryLinear(module, scale=scale, group=group))
         replaced += 1
     return replaced
 
@@ -210,6 +231,7 @@ class TrainConfig:
     model_dir: str
     corpus: str
     out: str
+    model_revision: str | None = None
     steps: int = 2000
     seq_len: int = 1024
     batch_size: int = 1
@@ -219,6 +241,8 @@ class TrainConfig:
     ce_weight: float = 0.5    # CE share when loss == "mix"
     init: str = "base"        # "base" (master = pretrained) or "random"
     scale: str = "absmean"    # STE ternary scale: "absmean" or "absmax"
+    target_profile: str = "auto"
+    include_lm_head: bool | None = None
     random_seed: int = 0
     device: str = "cuda:0"
     teacher_device: str = "cuda:1"
@@ -232,29 +256,60 @@ class TrainConfig:
 
 
 def train(config: TrainConfig) -> dict:
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
     from transformers.optimization import Adafactor
+
+    from bonsai_forensics.modeling import load_text_causal_lm
+    from bonsai_forensics.targets import infer_profile, target_coverage
 
     started = time.time()
     out_dir = Path(config.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    tokenizer = AutoTokenizer.from_pretrained(config.model_dir)
+    tokenizer = AutoTokenizer.from_pretrained(
+        config.model_dir, revision=config.model_revision)
     ids = tokenizer(Path(config.corpus).read_text(encoding="utf-8"), return_tensors="np")["input_ids"].reshape(-1)
 
-    teacher = AutoModelForCausalLM.from_pretrained(config.model_dir, dtype=torch.bfloat16).to(config.teacher_device)
+    teacher = load_text_causal_lm(
+        config.model_dir, revision=config.model_revision,
+        dtype=torch.bfloat16, device=config.teacher_device)
     teacher.eval()
     for parameter in teacher.parameters():
         parameter.requires_grad_(False)
 
-    student = AutoModelForCausalLM.from_pretrained(config.model_dir, dtype=torch.bfloat16).to(config.device)
+    student = load_text_causal_lm(
+        config.model_dir, revision=config.model_revision,
+        dtype=torch.bfloat16, device=config.device)
+    target_profile = infer_profile(student, config.target_profile)
+    coverage = target_coverage(
+        student, profile=target_profile, include_lm_head=config.include_lm_head)
+    if not coverage["target_count_ok"]:
+        raise ValueError(
+            f"target inventory mismatch: selected {coverage['selected_linear_tensors']} "
+            f"linears, expected {coverage['expected_selected_linear_tensors']}")
     if config.grad_checkpointing:
         student.gradient_checkpointing_enable()
-    replaced = wrap_ternary(student, scale=config.scale)
+    replaced = wrap_ternary(
+        student, scale=config.scale, profile=target_profile,
+        include_lm_head=config.include_lm_head)
+    manifest = build_manifest(
+        repo_root=Path(__file__).resolve().parents[1],
+        model_dir=config.model_dir,
+        model_revision=config.model_revision,
+        corpus=config.corpus,
+        args=config,
+        target_coverage=coverage,
+        token_ids=ids,
+    )
+    write_manifest(out_dir / "run-manifest.json", manifest)
     if config.init == "random":
         randomize_ternary(student, seed=config.random_seed)
     frozen = freeze_non_ternary(student)
     trainable = [p for p in student.parameters() if p.requires_grad]
-    optimizer = Adafactor(trainable, lr=config.lr, scale_parameter=False, relative_step=False, warmup_init=False)
+    optimizer = Adafactor(
+        trainable, lr=config.lr, eps=(1e-30, 0.001),
+        clip_threshold=1.0, decay_rate=-0.8, beta1=None,
+        weight_decay=0.0, scale_parameter=False, relative_step=False,
+        warmup_init=False)
 
     # Hold out exactly the token region evaluate_perplexity reads, converted to
     # training-window units, so the held-out PPL is honest by construction.
@@ -310,11 +365,18 @@ def train(config: TrainConfig) -> dict:
             history.append({"step": step, "loss": round(loss.item(), 4)})
             print(f"[recover] step {step} loss {loss.item():.4f}", flush=True)
         if step % config.save_every == 0 or step == config.steps:
-            torch.save({"state": student.state_dict(), "step": step}, out_dir / "student.pt")
+            path = out_dir / "student.pt"
+            temporary = path.with_suffix(path.suffix + ".tmp")
+            torch.save({"state": student.state_dict(), "step": step,
+                        "manifest": manifest}, temporary)
+            os.replace(temporary, path)
 
     result = {
         "task": "T28",
         "model": config.model_dir,
+        "model_revision": config.model_revision,
+        "target_profile": coverage["profile"],
+        "target_coverage": coverage,
         "steps": config.steps,
         "replaced_linears": replaced,
         "frozen_tensors": frozen,
@@ -329,6 +391,17 @@ def train(config: TrainConfig) -> dict:
         ),
     }
     (out_dir / "recover-report.json").write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
+    manifest["status"] = "complete"
+    manifest["outputs"] = {
+        "recover-report.json": {
+            "path": str(out_dir / "recover-report.json"),
+            "bytes": (out_dir / "recover-report.json").stat().st_size,
+        }
+    }
+    write_manifest(out_dir / "run-manifest.json", manifest)
+    (out_dir / "COMPLETE").write_text(
+        json.dumps({"status": "complete", "step": config.steps}, sort_keys=True) + "\n",
+        encoding="utf-8")
     print(json.dumps(result["history"][-3:], indent=2))
     print(
         "heldout ppl: teacher %.1f | student initial %.1f -> final %.1f"
@@ -340,6 +413,8 @@ def train(config: TrainConfig) -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-dir", required=True)
+    parser.add_argument("--model-revision", default=None,
+                        help="immutable Hugging Face revision/commit SHA")
     parser.add_argument("--corpus", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--steps", type=int, default=2000)
@@ -351,6 +426,10 @@ def main(argv=None) -> int:
     parser.add_argument("--ce-weight", type=float, default=0.5)
     parser.add_argument("--init", choices=("base", "random"), default="base")
     parser.add_argument("--scale", choices=("absmean", "absmax"), default="absmean")
+    parser.add_argument("--target-profile", default="auto",
+                        help="architecture target profile (auto, qwen3, qwen3_5, llama, ...)")
+    parser.add_argument("--include-lm-head", action=argparse.BooleanOptionalAction,
+                        default=None)
     parser.add_argument("--random-seed", type=int, default=0)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--teacher-device", default="cuda:1")
@@ -360,6 +439,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     config = TrainConfig(
         model_dir=args.model_dir,
+        model_revision=args.model_revision,
         corpus=args.corpus,
         out=args.out,
         steps=20 if args.smoke else args.steps,
@@ -371,13 +451,24 @@ def main(argv=None) -> int:
         ce_weight=args.ce_weight,
         init=args.init,
         scale=args.scale,
+        target_profile=args.target_profile,
+        include_lm_head=args.include_lm_head,
         random_seed=args.random_seed,
         device=args.device,
         teacher_device=args.teacher_device,
         grad_checkpointing=not args.no_grad_checkpointing,
         resume=args.resume,
     )
-    result = train(config)
+    try:
+        result = train(config)
+    except Exception as exc:
+        out = Path(config.out)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "FAILED").write_text(
+            json.dumps({"status": "failed", "error": f"{type(exc).__name__}: {exc}"},
+                       sort_keys=True) + "\n",
+            encoding="utf-8")
+        raise
     return 0
 
 

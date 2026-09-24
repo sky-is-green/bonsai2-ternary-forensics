@@ -25,22 +25,35 @@ def main() -> int:
     ap.add_argument("--windows", type=int, default=8)
     ap.add_argument("--seq", type=int, default=2048)
     ap.add_argument("--device", default="cuda:0")
+    ap.add_argument("--target-profile", default=None,
+                    help="architecture profile; required for non-Qwen3 checkpoints")
+    ap.add_argument("--target-suffixes", default=None,
+                    help="comma-separated suffix override")
+    ap.add_argument("--include-lm-head", action=argparse.BooleanOptionalAction, default=None)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from bonsai_forensics.modeling import load_text_causal_lm
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_dir)
     ids = tokenizer(Path(args.corpus).read_text(encoding="utf-8"), return_tensors="np")["input_ids"].reshape(-1)
     windows = ids[: args.windows * args.seq].reshape(args.windows, args.seq)
 
-    teacher = AutoModelForCausalLM.from_pretrained(args.model_dir, dtype=torch.bfloat16).to(args.device)
+    teacher = load_text_causal_lm(args.model_dir, dtype=torch.bfloat16, device=args.device)
     teacher.eval()
     for parameter in teacher.parameters():
         parameter.requires_grad_(False)
 
-    student = AutoModelForCausalLM.from_pretrained(args.model_dir, dtype=torch.bfloat16).to(args.device)
-    wrap_ternary(student)
+    student = load_text_causal_lm(args.model_dir, dtype=torch.bfloat16, device=args.device)
+    wrap_kwargs = {}
+    if args.target_profile is not None:
+        wrap_kwargs["profile"] = args.target_profile
+    if args.target_suffixes:
+        wrap_kwargs["suffixes"] = tuple(
+            s.strip() for s in args.target_suffixes.split(",") if s.strip())
+    if args.include_lm_head is not None:
+        wrap_kwargs["include_lm_head"] = args.include_lm_head
+    wrap_ternary(student, **wrap_kwargs)
     freeze_non_ternary(student)
     payload = torch.load(args.checkpoint, map_location="cpu")
     student.load_state_dict(payload["state"])

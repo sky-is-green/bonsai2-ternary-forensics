@@ -1,5 +1,11 @@
 # Retention vs scale — Prism published numbers vs our recipe
 
+> **Evidence status (2026-09-24):** the 0.6B/1.7B WikiText rungs are completed
+> legacy validation results; the 4B rung is still in progress. The pre-registered
+> primary-corpus PPL threshold is not met by the available rungs, and all
+> “best” values are validation-selected. See
+> [`REPRODUCIBILITY-AUDIT.md`](REPRODUCIBILITY-AUDIT.md).
+
 **Why this exists.** The mission bar (≥97% retention) is Prism's **27B** number.
 We have been measuring a **1.7B** canary against it. Retention in Prism's own
 released tables is strongly scale-dependent, so "our canary is short of 97%" is
@@ -54,8 +60,8 @@ holdout, 8 regions × 8 windows.
 
 **Reading.** At 1.7B, Prism's *own* model retains ~85–88% on benchmarks. Our
 canary sits at ~87–90% on PPL. The metrics are not the same, so this is not a
-"we beat Prism" claim — but it does mean our canary is **in the same regime as
-Prism at that scale**, and the 97% target belongs to the 27B.
+"we beat Prism" claim. It is only a same-scale sanity check; the 97% target
+belongs to the 27B and the scaling rule is not complete.
 
 ## The test that follows
 
@@ -69,7 +75,7 @@ matched, and compare the *shape* of our retention-vs-size curve to Prism's:
 
 That is the falsifiable question. "We could not reach 97% at 1.7B" is not.
 
-## Ladder results — resolved (2026-09-23)
+## Ladder results — partial evidence (2026-09-24)
 
 10k steps, seed 1337, 8×8 holdout (verified against the F11 leak). Two corpora
 plus a block-size control:
@@ -105,14 +111,17 @@ managed decay; same corpus, seed, eval set):
 | 0.6B (blk1024) | 19500 | 1.9263 | 51.9% | 24.50 |
 | 1.7B (blk1024) | 17000 | 1.5731 | **63.6%** | 12.08 |
 
-The direction survives and *strengthens*: **51.9% → 63.6%**, with ΔPPL agreeing
-(24.5 → 12.1). Convergence roughly halved the 0.6B ratio (3.15 → 1.93) and cut
-the 1.7B by a fifth (1.98 → 1.57) — the 10k numbers were a floor, not the level.
+The two available rungs show a promising direction, **51.9% → 63.6%**, with
+ΔPPL agreeing (24.5 → 12.1), but this is not yet the completed pre-registered
+result: the 4B rung is still running and the primary-corpus teacher-PPL
+threshold (largest rung ≤20) is not met. The earlier 10k values were floors,
+not final levels.
 
-**The 4B rung** (the pre-registered rule's third rung) re-runs under the same
-protocol — the first attempt was abandoned as an instrument (no schedule,
-diverging by step 5500; the block control above shows the block was not the
-reason). Script: `run_wiki_convergence_4B.sh`.
+**The 4B rung** is the deciding third point. The first attempt was abandoned as
+an instrument (no schedule, diverging by step 5500); the replacement uses the
+same managed schedule and is tracked in `artifacts/rmd/wiki-conv-4B.log`.
+Do not call the scaling question resolved until its report and manifest are
+complete.
 
 Scripts: `scripts/pilot/run_size_ladder.sh`, `run_wiki_ladder.sh`,
 `run_wiki_convergence.sh`, `run_wiki_convergence_4B.sh`, `run_rotblock_control.sh`,

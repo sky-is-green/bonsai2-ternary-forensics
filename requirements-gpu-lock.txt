@@ -1,0 +1,19 @@
+# Reference environment captured 2026-09-24 for the ROCm pilot node.
+# This is a reproducibility record, not a promise that the ROCm wheel index
+# remains available.  The CPU CI intentionally uses pyproject/requirements.txt.
+#
+# Python: 3.13
+# GPU: 2 x AMD Radeon RX 7900 XT (gfx1100), ~19.98 GiB usable VRAM/card
+# Driver/ROCm: record via rocm-smi/amd-smi in the run manifest
+#
+# Install torch from the matching ROCm index first, then:
+torch==2.11.0+rocm7.2
+transformers==5.5.0
+datasets==4.3.0
+accelerate==1.15.0
+huggingface-hub==1.32.0
+tokenizers==0.22.2
+safetensors==0.8.0
+numpy==2.5.2
+PyYAML==6.0.3
+pytest==9.1.1

@@ -144,3 +144,21 @@ def quantize_rtn_absmean(w: np.ndarray, group_size: int = DEFAULT_GROUP_SIZE) ->
     codes = clip_codes(groups / s)
     scales = np.where((codes == 0).all(axis=-1), 0.0, np.squeeze(s, axis=-1))
     return TernaryQuant(codes.reshape(padded.shape), scales, group_size, orig)
+
+
+# Bonsai-2-class (PQ2_0) canonical quantizer.  Gate 1 forensics
+# (`research/gate1-forensics.md`, `bonsai_forensics/gate1_forensics.py`) show
+# that plain absmean RTN of the rotated base reproduces Prism's released PQ2_0
+# trits at 0.896-0.948 agreement, while the LS-refined spec quantizer drops to
+# 0.854-0.874: the refinement moves 6-7% of trits *away* from Prism.  The
+# PQ2_0-class path is therefore deliberately *unrefined*.
+#
+# This does not change the frozen TQ2_0 contract (spec §2.2: g256, refine x4);
+# it fixes the Bonsai-2-aligned PQ2_0 path (g128, refine 0) so the pilot's
+# deployed projection and the packed artifact use the same quantizer.
+PQ2_0_GROUP = 128
+
+
+def quantize_pq2_0(w: np.ndarray, group_size: int = PQ2_0_GROUP) -> TernaryQuant:
+    """Bonsai-2-class quantizer: plain absmean RTN at g128 (no LS refinement)."""
+    return quantize_rtn_absmean(w, group_size)

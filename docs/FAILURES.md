@@ -213,6 +213,9 @@ a latent bug); they are recorded for completeness only.
   [F11](#f11--t28-holdout-leak-evaluation-on-training-windows). The mission-level
   shortfall is therefore larger than 90.6% implies; the scope decision above
   (do not fund the 27B proof-run) is unchanged.
+- **[rev 2026-09-24] Precision wording:** the historical entry says “fp32
+  teacher,” but the current model loader uses BF16. Future manifests must record
+  the actual teacher/master/logit dtypes rather than inherit that label.
 
 ## F6 — Student-stream block-wise KD dead-end
 
@@ -356,6 +359,11 @@ a latent bug); they are recorded for completeness only.
   was leak 1, 1.219× was leak 2, ~2.09× is the clean number.
 - **Status:** open (correction propagated to
   [`docs/WHITEPAPER.md`](WHITEPAPER.md) sections 3, 4, 5 and 7; F5 rev note).
+- **[rev 2026-09-24]** The local `artifacts/recover/holdout-v2` report is present
+  and records a completed 5,000-step clean-holdout run, so the older “pending”
+  wording above is stale. It is still a validation-selected legacy result, not
+  an untouched final test-set claim; the next baseline must preserve that
+  distinction.
 - **What it rules out:** citing 1.103× / 90.6% as a held-out result, and the
   inference that the 1.7B pilot was close to the mission bar. It does **not**
   rule out STE+KD training as a route.

@@ -5,7 +5,7 @@
 # of Adafactor. The *additive* form of the same two-well potential collapsed
 # (`tern-lam*` ~0%); this tests it as a mirror map. Card 1 (the 4B rung holds
 # both cards; memory fits in the 12.6 GB free, at some compute contention).
-set -u
+set -uo pipefail
 cd "$(dirname "$0")/../.."
 PY=${PY:-$HOME/.unsloth/studio/unsloth_studio/bin/python}
 CORPUS=artifacts/ternary/pilot/wikitext_3000.txt
@@ -23,7 +23,12 @@ if ! mkdir "$LOCK" 2>/dev/null; then echo "already running ($LOCK)"; exit 1; fi
 trap 'rmdir "$LOCK"' EXIT
 
 echo "[tw] start $(date +%H:%M:%S)"
-HIP_VISIBLE_DEVICES=1 $PY scripts/pilot/rmd_kd.py $COMMON \
-  --model-dir Qwen/Qwen3-0.6B --device cuda:0 --teacher-device cuda:0 \
-  --out artifacts/rmd/wiki-tw-0.6B > artifacts/rmd/wiki-tw-0.6B.log 2>&1
-echo "[tw] exit code=$? $(date +%H:%M:%S)"
+if HIP_VISIBLE_DEVICES=1 $PY scripts/pilot/rmd_kd.py $COMMON \
+    --model-dir Qwen/Qwen3-0.6B --device cuda:0 --teacher-device cuda:0 \
+    --out artifacts/rmd/wiki-tw-0.6B > artifacts/rmd/wiki-tw-0.6B.log 2>&1; then
+  code=0
+else
+  code=$?
+fi
+echo "[tw] exit code=$code $(date +%H:%M:%S)"
+exit "$code"

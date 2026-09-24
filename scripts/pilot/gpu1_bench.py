@@ -95,8 +95,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", default="cuda:1")
     parser.add_argument("--steps", type=int, default=200)
-    parser.add_argument("--model-dir", default=str(Path.home() / "Desktop/work/hivebench/artifacts/ternary/canary/hf"))
-    parser.add_argument("--corpus", default=str(Path.home() / "Desktop/work/hivebench/artifacts/ternary/canary/tinyshakespeare.txt"))
+    parser.add_argument("--model-dir", default=str(Path(__file__).resolve().parents[2] / "artifacts" / "ternary" / "canary" / "hf"))
+    parser.add_argument("--corpus", default=str(Path(__file__).resolve().parents[2] / "artifacts" / "ternary" / "canary" / "tinyshakespeare.txt"))
     args = parser.parse_args()
 
     a = gemm_consistency(args.device)

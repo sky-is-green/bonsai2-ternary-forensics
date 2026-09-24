@@ -43,7 +43,9 @@ from __future__ import annotations
 import argparse
 import copy
 import functools
+import hashlib
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -63,9 +65,31 @@ from bonsai_forensics.evaluate import (  # noqa: E402
     region_windows,
     result_markdown,
 )
-from bonsai_forensics.recover import GROUP, TARGET_SUFFIXES, TernaryLinear, ternary_ste, wrap_ternary  # noqa: E402
-from bonsai_forensics.rotation import absorb_input, absorb_output, hadamard, rotations_for  # noqa: E402
+from bonsai_forensics.recover import GROUP, TernaryLinear, ternary_ste, wrap_ternary  # noqa: E402
+from bonsai_forensics.rotation import (  # noqa: E402
+    absorb_input,
+    absorb_output,
+    basis_digest,
+    explicit_sign_digest,
+    hadamard,
+    load_sign_manifest,
+    resolve_rotations,
+    rotations_for,
+)
 from bonsai_forensics.schedule import PlateauDecay  # noqa: E402
+from bonsai_forensics.provenance import (  # noqa: E402
+    build_manifest,
+    file_fingerprint,
+    write_manifest,
+)
+from bonsai_forensics.modeling import load_text_causal_lm  # noqa: E402
+from bonsai_forensics.targets import (  # noqa: E402
+    TargetProfile,
+    infer_profile,
+    select_target_linears,
+    target_coverage,
+    target_side,
+)
 
 
 def load_windows(tokenizer, corpus: Path, seq: int, eval_windows: int, eval_regions: int = 1):
@@ -91,13 +115,20 @@ def load_windows(tokenizer, corpus: Path, seq: int, eval_windows: int, eval_regi
     return windows[keep], corpus_ids, regions
 
 
-def target_linears(model: torch.nn.Module):
+def target_linears(model: torch.nn.Module, *, suffixes=None, profile="auto",
+                   include_lm_head=None):
+    """Select and unfreeze the architecture's trainable ternary linears."""
+    selected = select_target_linears(
+        model, profile=profile, include_lm_head=include_lm_head, suffixes=suffixes)
+    selected_modules = {id(module) for _, module in selected}
     found = []
     for name, module in model.named_modules():
-        if isinstance(module, torch.nn.Linear) and name.endswith(TARGET_SUFFIXES):
+        if not isinstance(module, torch.nn.Linear):
+            continue
+        if id(module) in selected_modules:
             module.weight.requires_grad_(True)
             found.append(module)
-        elif isinstance(module, torch.nn.Linear):
+        else:
             module.weight.requires_grad_(False)
     return found
 
@@ -147,13 +178,16 @@ def concentration(linears):
 
 
 @torch.no_grad()
-def project_ternary(model):
-    """In-place absmean RTN g128 projection of every target linear."""
-    for name, module in model.named_modules():
-        if isinstance(module, torch.nn.Linear) and name.endswith(TARGET_SUFFIXES):
-            w = module.weight.detach().cpu().float().numpy()
-            tq = quantize_rtn_absmean(w, 128)
-            module.weight.data = torch.from_numpy(tq.dequantize().astype(np.float32)).to(device=module.weight.device, dtype=module.weight.dtype)
+def project_ternary(model, *, suffixes=None, profile="auto", include_lm_head=None,
+                    group=GROUP):
+    """In-place absmean RTN projection of every selected target linear."""
+    selected = select_target_linears(
+        model, profile=profile, include_lm_head=include_lm_head, suffixes=suffixes)
+    for _, module in selected:
+        w = module.weight.detach().cpu().float().numpy()
+        tq = quantize_rtn_absmean(w, group)
+        module.weight.data = torch.from_numpy(tq.dequantize().astype(np.float32)).to(
+            device=module.weight.device, dtype=module.weight.dtype)
 
 
 def magnitude_masks(linears, gate: float):
@@ -224,8 +258,8 @@ class RotatedLinear(torch.nn.Linear):
         super().__init__(base.in_features, base.out_features, bias=base.bias is not None)
         self.weight = torch.nn.Parameter(base.weight.detach().clone())
         self.bias = base.bias
-        self.rot_in = rot_in
-        self.rot_out = rot_out
+        self.register_buffer("rot_in", rot_in, persistent=False)
+        self.register_buffer("rot_out", rot_out, persistent=False)
         self.ste = ste
         self.learn_scale = learn_scale
         self.scale = None  # set by wrap_rotated after the rotated master is written
@@ -250,7 +284,7 @@ class RotatedLinear(torch.nn.Linear):
 
 @functools.lru_cache(maxsize=None)
 def _rot_tensor(width: int, seed: int, dtype=torch.float32, device="cuda:0",
-                block: int | None = None) -> torch.Tensor:
+                block: int | None = None, signs=None) -> torch.Tensor:
     """Dense block-diagonal R for one width (spec 1.1/1.2, PRF signs).
 
     Cached by (width, seed, dtype, device, block): the rotation depends only on
@@ -258,7 +292,8 @@ def _rot_tensor(width: int, seed: int, dtype=torch.float32, device="cuda:0",
     down_proj shares another. Without this the dense matrices are rebuilt per
     module and a 4B model needs ~10 GB of pure rotation; with it, ~0.2 GB.
     Callers must treat the result as read-only (it is a shared buffer)."""
-    rots = rotations_for(width, seed, "hidden", block=block)
+    rots = ([np.asarray(s, dtype=np.float64) for s in signs]
+            if signs is not None else rotations_for(width, seed, "hidden", block=block))
     g = len(rots[0])
     out = np.zeros((width, width), dtype=np.float64)
     for k, signs in enumerate(rots):
@@ -269,29 +304,54 @@ def _rot_tensor(width: int, seed: int, dtype=torch.float32, device="cuda:0",
 
 def wrap_rotated(model: torch.nn.Module, seed: int, ste: bool = False,
                  learn_scale: bool = False, block: int | None = None,
-                 suffixes: tuple[str, ...] = TARGET_SUFFIXES) -> list[torch.nn.Module]:
-    """Absorb the spec rotation into every target linear (spec table 1.3:
-    q/k/v, gate/up consume a rotated input (W R^T); o_proj/down emit a rotated
-    output (R W, bias' = R b)) and keep the function exact via RotatedLinear
-    wrappers. With `ste`, the forward ternarizes the rotated master (rotation +
-    quantization-aware training). Returns the wrapped modules with grad set."""
+                 suffixes=None, profile="auto", include_lm_head=None,
+                 rotation_mode: str = "residual", sign_sets=None) -> list[torch.nn.Module]:
+    """Wrap selected linears with an edge-local rotation proxy.
+
+    ``residual`` keeps the historical Qwen ladder's input/output-side
+    convention.  ``input`` rotates each selected linear's input axis, which is
+    closer to the packed Prism layout, but remains edge-local: this function
+    does not fold hidden norms, rewrite the embedding, or perform a persistent
+    basis export.  The FP function is preserved by the paired rotation.
+    """
+    selected_profile = (profile if isinstance(profile, TargetProfile)
+                        else infer_profile(model, profile))
+    selected = select_target_linears(
+        model, profile=selected_profile, include_lm_head=include_lm_head,
+        suffixes=suffixes)
+
+    def rotations_for_width(width: int):
+        if sign_sets is not None:
+            return resolve_rotations(width, sign_sets, seed, strict=True)
+        return rotations_for(width, seed, "hidden", block=block)
+
     wrapped = []
-    for name, module in list(model.named_modules()):
-        if not (isinstance(module, torch.nn.Linear) and name.endswith(suffixes)):
-            continue
+    for name, module in selected:
         parent_name, _, child = name.rpartition(".")
         parent = model.get_submodule(parent_name) if parent_name else model
-        if name.endswith(("o_proj", "down_proj")):
-            rots = rotations_for(module.out_features, seed, "hidden", block=block)
+        if rotation_mode == "input":
+            # Prism's packed format rotates each linear's input/last axis;
+            # this is independent of whether the module emits a residual.
+            side = "input"
+        elif rotation_mode == "residual":
+            side = target_side(name, selected_profile)
+        else:
+            raise ValueError(f"unknown rotation mode {rotation_mode!r}")
+        if side == "output":
+            width = module.out_features
+            rots = rotations_for_width(width)
+            rot_signs = tuple(tuple(float(x) for x in signs) for signs in rots)
             w_abs = absorb_output(module.weight.detach().cpu().float().numpy(), rots)
-            repl = RotatedLinear(module, None, _rot_tensor(module.out_features, seed, module.weight.dtype, module.weight.device, block).transpose(-1, -2), ste=ste, learn_scale=learn_scale)
+            repl = RotatedLinear(module, None, _rot_tensor(width, seed, module.weight.dtype, module.weight.device, block, rot_signs).transpose(-1, -2), ste=ste, learn_scale=learn_scale)
             if module.bias is not None:
-                r = _rot_tensor(module.out_features, seed, torch.float32, module.weight.device, block)
+                r = _rot_tensor(width, seed, torch.float32, module.weight.device, block, rot_signs)
                 repl.bias.data = (r @ module.bias.detach().cpu().float()).to(module.bias.dtype)
         else:
-            rots = rotations_for(module.in_features, seed, "hidden", block=block)
+            width = module.in_features
+            rots = rotations_for_width(width)
+            rot_signs = tuple(tuple(float(x) for x in signs) for signs in rots)
             w_abs = absorb_input(module.weight.detach().cpu().float().numpy(), rots)
-            repl = RotatedLinear(module, _rot_tensor(module.in_features, seed, module.weight.dtype, module.weight.device, block), None, ste=ste, learn_scale=learn_scale)
+            repl = RotatedLinear(module, _rot_tensor(width, seed, module.weight.dtype, module.weight.device, block, rot_signs), None, ste=ste, learn_scale=learn_scale)
         repl.weight.data = torch.from_numpy(w_abs.astype(np.float32)).to(
             device=module.weight.device, dtype=module.weight.dtype)
         repl.weight.requires_grad_(True)
@@ -368,29 +428,104 @@ def mirror_step_tw(linears, lr: float, scale: float = 1.0, lam: float = 0.5) -> 
 
 
 def run(args) -> dict:
-    from transformers import Adafactor, AutoModelForCausalLM, AutoTokenizer
+    from transformers import Adafactor, AutoTokenizer
+
+    if args.batch < 1:
+        raise SystemExit("--batch must be >= 1")
+    if args.steps < 1 or args.seq < 2:
+        raise SystemExit("--steps must be >= 1 and --seq must be >= 2")
+    if args.temp <= 0:
+        raise SystemExit("--temp must be > 0")
+    if (args.lr_decay_patience > 0 or args.lr_decay_drift_eps > 0) and args.project_every < 1:
+        raise SystemExit("managed decay requires --project-every > 0")
+    if args.lr_floor > args.lr:
+        raise SystemExit("--lr-floor must not exceed --lr")
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     device = torch.device(args.device)
     teacher_device = torch.device(args.teacher_device)
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_dir)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_dir, revision=getattr(args, "model_revision", None),
+        trust_remote_code=getattr(args, "trust_remote_code", False),
+        local_files_only=getattr(args, "local_files_only", False))
     train_windows, corpus_ids, regions = load_windows(
         tokenizer, Path(args.corpus), args.seq, args.eval_windows, args.eval_regions)
     print(f"[rmd] train windows {train_windows.shape}, eval {len(regions)} region(s) "
           f"x {args.eval_windows} windows, q={args.q} lam={args.lam}", flush=True)
 
-    teacher = AutoModelForCausalLM.from_pretrained(args.model_dir, dtype=torch.bfloat16).to(teacher_device)
+    teacher = load_text_causal_lm(
+        args.model_dir, revision=getattr(args, "model_revision", None),
+        dtype=torch.bfloat16, device=teacher_device,
+        trust_remote_code=getattr(args, "trust_remote_code", False),
+        local_files_only=getattr(args, "local_files_only", False))
     teacher.eval()
     for p in teacher.parameters():
         p.requires_grad_(False)
 
-    student = AutoModelForCausalLM.from_pretrained(args.model_dir, dtype=torch.bfloat16).to(device)
+    student = load_text_causal_lm(
+        args.model_dir, revision=getattr(args, "model_revision", None),
+        dtype=torch.bfloat16, device=device,
+        trust_remote_code=getattr(args, "trust_remote_code", False),
+        local_files_only=getattr(args, "local_files_only", False))
     student.gradient_checkpointing_enable()
+
+    target_profile = infer_profile(student, getattr(args, "target_profile", "auto"))
+    sign_sets = None
+    if getattr(args, "signs_manifest", None):
+        sign_sets = load_sign_manifest(args.signs_manifest)
+    suffix_arg = getattr(args, "target_suffixes", None)
+    target_suffixes = tuple(
+        s.strip() for s in suffix_arg.split(",") if s.strip()
+    ) if suffix_arg else None
+    include_lm_head = getattr(args, "include_lm_head", None)
+    coverage = target_coverage(
+        student, profile=target_profile, include_lm_head=include_lm_head,
+        suffixes=target_suffixes)
+    print(f"[rmd] target profile={coverage['profile']} "
+          f"tensors={coverage['selected_linear_tensors']} "
+          f"linear-parameter coverage={100.0 * coverage['selected_fraction']:.2f}% "
+          f"widths={coverage['rotation_widths']}", flush=True)
+    if coverage["selected_linear_tensors"] == 0:
+        raise SystemExit("target profile selected no linear layers")
+    if not coverage["target_count_ok"] and not getattr(args, "allow_target_count_mismatch", False):
+        raise SystemExit(
+            f"target inventory mismatch: selected {coverage['selected_linear_tensors']} "
+            f"linears, expected {coverage['expected_selected_linear_tensors']} "
+            f"for profile {coverage['profile']}; refusing to train")
+
+    rot_seed = args.seed if args.rot_seed is None else args.rot_seed
+    basis_widths = (coverage["input_rotation_widths"]
+                    if args.rotation_mode == "input" else coverage["rotation_widths"])
+    if sign_sets is not None:
+        basis_record = {
+            "source": "explicit_manifest",
+            "path": args.signs_manifest,
+            "file": file_fingerprint(args.signs_manifest),
+            "domain": "hidden",
+            "seed": int(rot_seed),
+            "block_override": args.rot_block,
+            "widths": basis_widths,
+            "digest": explicit_sign_digest(sign_sets),
+        }
+    else:
+        basis_record = {
+            "source": "prf",
+            "domain": "hidden",
+            "seed": int(rot_seed),
+            "block_override": args.rot_block,
+            "widths": basis_widths,
+            "digest": basis_digest(basis_widths, rot_seed, "hidden", args.rot_block),
+        }
+    coverage["rotation_basis"] = basis_record
+
     if args.rotate:
-        rot_seed = args.rot_seed or args.seed
-        linears = wrap_rotated(student, rot_seed, ste=args.ste, learn_scale=args.learn_scale, block=args.rot_block)
+        linears = wrap_rotated(
+            student, rot_seed, ste=args.ste, learn_scale=args.learn_scale,
+            block=args.rot_block, suffixes=target_suffixes,
+            profile=target_profile, include_lm_head=include_lm_head,
+            rotation_mode=args.rotation_mode, sign_sets=sign_sets)
         mode = "rotated + STE ternary"
         if args.learn_scale:
             mode += " + learnable scales"
@@ -398,12 +533,16 @@ def run(args) -> dict:
             mode = "rotated (FP forward)"
         print(f"[rmd] {mode} on {len(linears)} target linears", flush=True)
     elif args.ste:
-        wrap_ternary(student)
+        wrap_ternary(
+            student, suffixes=target_suffixes,
+            profile=target_profile, include_lm_head=include_lm_head)
         linears = [m for m in student.modules() if isinstance(m, TernaryLinear)]
         print(f"[rmd] STE ternary forward on {len(linears)} target linears "
               f"(deployed-model ratio)", flush=True)
     else:
-        linears = target_linears(student)
+        linears = target_linears(
+            student, suffixes=target_suffixes, profile=target_profile,
+            include_lm_head=include_lm_head)
     masks = magnitude_masks(linears, args.gate)
     for p in student.parameters():
         p.requires_grad_(False)
@@ -414,17 +553,35 @@ def run(args) -> dict:
 
     trainable_params = [m.weight for m in linears]
     trainable_params += [m.scale for m in linears if getattr(m, "scale", None) is not None]
-    opt = Adafactor(trainable_params, lr=args.lr, scale_parameter=False, relative_step=False)
+    opt = Adafactor(
+        trainable_params, lr=args.lr, eps=(1e-30, 0.001),
+        clip_threshold=1.0, decay_rate=-0.8, beta1=None,
+        weight_decay=0.0, scale_parameter=False, relative_step=False,
+        warmup_init=False)
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    manifest = build_manifest(
+        repo_root=Path(__file__).resolve().parents[2],
+        model_dir=args.model_dir,
+        model_revision=getattr(args, "model_revision", None),
+        corpus=args.corpus,
+        args=args,
+        target_coverage=coverage,
+        token_ids=corpus_ids,
+    )
+    write_manifest(out / "run-manifest.json", manifest)
 
     def _snapshot(step, state_path):
         # Master weights only (`TernaryLinear`/`RotatedLinear` store the
         # trainable master as `weight`; the ternary forward is deterministic).
         # CPU copies so the save does not hold GPU memory.
         state = {k: v.detach().cpu() for k, v in student.state_dict().items()}
-        torch.save({"config": vars(args), "state": state, "step": step}, state_path)
+        payload = {"config": vars(args), "manifest": manifest,
+                   "state": state, "step": step}
+        temporary = state_path.with_suffix(state_path.suffix + ".tmp")
+        torch.save(payload, temporary)
+        os.replace(temporary, state_path)
 
     def save_checkpoint(step):
         _snapshot(step, out / "student.pt")
@@ -460,7 +617,23 @@ def run(args) -> dict:
            "eval_regions": args.eval_regions, "eval_windows": args.eval_windows,
            "steps": args.steps, "seq": args.seq, "seed": args.seed,
            "update": args.update, "md_q": args.md_q, "md_shell": args.md_shell,
-           "rotate": args.rotate, "ste": args.ste, "events": []}
+           "rotate": args.rotate, "ste": args.ste,
+           "rotation_mode": args.rotation_mode,
+           "rotation_basis": coverage["rotation_basis"],
+           "target_profile": coverage["profile"],
+           "model_type": getattr(student.config, "model_type", None),
+           "model_class": type(student).__name__,
+           "target_suffixes": list(coverage["by_suffix"]),
+           "target_coverage": coverage,
+           "manifest": "run-manifest.json",
+           "optimizer": {
+               "name": "Adafactor", "eps": [1e-30, 0.001],
+               "clip_threshold": 1.0, "decay_rate": -0.8,
+               "beta1": None, "weight_decay": 0.0,
+               "scale_parameter": False, "relative_step": False,
+               "warmup_init": False,
+           },
+           "events": []}
 
     def eval_deployed():
         """Evaluate the deployed model across all regions (JSON-ready result)."""
@@ -474,10 +647,31 @@ def run(args) -> dict:
             # training masters (an in-place projection reset the weights at
             # every checkpoint and corrupted the first ternary-attractor run).
             s = copy.deepcopy(student)
-            project_ternary(s)
+            project_ternary(
+                s, suffixes=target_suffixes, profile=target_profile,
+                include_lm_head=include_lm_head)
             res = evaluate_regions(s, corpus_ids, args.seq, regions, device)
             del s
         return add_ratios(res, teacher_ppls)
+
+    def vram_snapshot():
+        """Record allocator/driver state before releasing cached blocks."""
+        rows = {}
+        for name, dev in (("student", device), ("teacher", teacher_device)):
+            try:
+                torch.cuda.synchronize(dev)
+                free, total = torch.cuda.mem_get_info(dev)
+                rows[name] = {
+                    "device": str(dev),
+                    "free_bytes": int(free),
+                    "total_bytes": int(total),
+                    "allocated_bytes": int(torch.cuda.memory_allocated(dev)),
+                    "reserved_bytes": int(torch.cuda.memory_reserved(dev)),
+                    "peak_allocated_bytes": int(torch.cuda.max_memory_allocated(dev)),
+                }
+            except Exception as exc:  # diagnostics must not kill a run
+                rows[name] = {"error": f"{type(exc).__name__}: {exc}"}
+        return rows
 
     def report(step, label, projected=False):
         ev = {"step": step, "label": label}
@@ -492,7 +686,19 @@ def run(args) -> dict:
                   f"(min {res['aggregate']['min_ratio']:.3f}, "
                   f"max {res['aggregate']['max_ratio']:.3f})", flush=True)
         ev.update(concentration(linears))
+        ev["vram"] = vram_snapshot()
+        for name, row in ev["vram"].items():
+            if "free_bytes" in row:
+                print(f"[rmd] vram {name} step {step}: free={row['free_bytes'] / 2**30:.2f} GiB "
+                      f"reserved={row['reserved_bytes'] / 2**30:.2f} GiB "
+                      f"peak={row['peak_allocated_bytes'] / 2**30:.2f} GiB", flush=True)
         log["events"].append(ev)
+        # ROCm/PyTorch can otherwise retain a large transient evaluation cache
+        # until the next allocation; release it before the next update.
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
         return res
 
     # baseline: projection ratio before any training (pure RTN)
@@ -502,16 +708,22 @@ def run(args) -> dict:
         # Faithful replication of the original in-place-eval accident: the
         # training masters start ON the ternary grid (the bug snapped at step
         # 0 too), then get re-snapped by --reproject-every.
-        project_ternary(student)
+        project_ternary(
+            student, suffixes=target_suffixes, profile=target_profile,
+            include_lm_head=include_lm_head)
         print("[rmd] snapped init masters to the ternary grid", flush=True)
 
     started = time.time()
     torch.cuda.reset_peak_memory_stats(device)
     student.train()
     step = 0
+    sampled_windows = 0
+    sampled_window_digest = hashlib.sha256()
     while step < args.steps:
         idx = np.random.permutation(len(train_windows))
         for i in idx[: max(1, args.batch)]:
+            sampled_windows += 1
+            sampled_window_digest.update(int(i).to_bytes(8, "little", signed=False))
             ids = torch.tensor(train_windows[i], dtype=torch.long, device=device).unsqueeze(0)
             with torch.no_grad():
                 t_logits = teacher(ids.to(teacher_device)).logits[..., :-1, :].to(device)
@@ -532,7 +744,12 @@ def run(args) -> dict:
                 mirror_step_tw(linears, args.lr, args.tw_lr_scale, args.tw_lam)
             else:
                 opt.step()
+            step_loss = float(loss.detach().item())
             step += 1
+            # Do not keep the final full-vocabulary logits alive across the
+            # periodic evaluation/checkpoint boundary.  They are large enough
+            # to matter on a 20 GiB ROCm card even after backward().
+            del t_logits, s_logits, loss
             if args.reproject_every and step % args.reproject_every == 0:
                 # Explicit alternating-projection schedule: snap the masters
                 # to the ternary grid mid-training and keep training from there.
@@ -540,12 +757,14 @@ def run(args) -> dict:
                     # Cost of returning to the grid: projection of the drifted
                     # masters, measured before the snap (deep copy, no mutation).
                     report(step, "pre-snap", projected=True)
-                project_ternary(student)
+                project_ternary(
+                    student, suffixes=target_suffixes, profile=target_profile,
+                    include_lm_head=include_lm_head)
                 report(step, "reproject")
             if step % args.log_every == 0:
                 sec = time.time() - started
-                print(f"[rmd] step {step}/{args.steps} loss {loss.item():.2f} {sec:.0f}s", flush=True)
-            if args.project_every and step % args.project_every == 0:
+                print(f"[rmd] step {step}/{args.steps} loss {step_loss:.2f} {sec:.0f}s", flush=True)
+            if args.project_every and step % args.project_every == 0 and step < args.steps:
                 res = report(step, "train", projected=True)
                 if res is not None:
                     ratio = float(res["aggregate"]["mean_ratio"])
@@ -582,6 +801,15 @@ def run(args) -> dict:
         if best_ratio is not None:
             log["best_mean_ratio"] = round(best_ratio, 4)
             log["best_retention"] = round(100.0 / best_ratio, 1)
+    log["training_semantics"] = {
+        "batch_interpretation": "sequential_windows_per_reshuffle",
+        "optimizer_updates": int(step),
+        "sampled_windows": int(sampled_windows),
+        "target_tokens": int(sampled_windows * args.seq),
+        "sampled_window_id_sha256": sampled_window_digest.hexdigest(),
+        "selection_metric": "adaptive_validation_retention",
+        "test_set_policy": "not_used_by_this_legacy_runner",
+    }
     # UI-ready artefacts: structured JSON is the data contract, the Markdown is
     # preview-friendly (Review pane / dashboard).
     (out / "eval-regions.json").write_text(json.dumps(final_res, indent=2), encoding="utf-8")
@@ -592,6 +820,15 @@ def run(args) -> dict:
     log["peak_allocated_gib"] = round(torch.cuda.max_memory_allocated(device) / 2**30, 2)
     log["peak_reserved_gib"] = round(torch.cuda.max_memory_reserved(device) / 2**30, 2)
     (out / "rmd-report.json").write_text(json.dumps(log, indent=2), encoding="utf-8")
+    manifest["status"] = "complete"
+    manifest["outputs"] = {
+        name: file_fingerprint(out / name)
+        for name in ("eval-regions.json", "eval-regions.md", "rmd-report.json")
+    }
+    write_manifest(out / "run-manifest.json", manifest)
+    (out / "COMPLETE").write_text(
+        json.dumps({"status": "complete", "step": args.steps}, sort_keys=True) + "\n",
+        encoding="utf-8")
     print(f"[rmd] wrote {out / 'rmd-report.json'}", flush=True)
     return log
 
@@ -599,6 +836,10 @@ def run(args) -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model-dir", required=True)
+    parser.add_argument("--model-revision", default=None,
+                        help="immutable Hugging Face revision/commit SHA")
+    parser.add_argument("--trust-remote-code", action="store_true")
+    parser.add_argument("--local-files-only", action="store_true")
     parser.add_argument("--corpus", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--q", type=int, default=8)
@@ -637,6 +878,20 @@ def main(argv=None) -> int:
                         help="override the spec rotation block size "
                              "min(1024, 2^v2(d)); must divide every target width "
                              "(used to isolate the block-size confound)")
+    parser.add_argument("--target-profile", default="auto",
+                        help="architecture target profile: auto, qwen3, qwen3_5, "
+                             "llama, mistral, olmo2, phi3, gpt_neox, or opt")
+    parser.add_argument("--rotation-mode", choices=("residual", "input"), default="residual",
+                        help="residual = legacy edge-side ladder proxy; input = edge-local "
+                             "per-linear input-axis proxy (not a persistent/export basis)")
+    parser.add_argument("--target-suffixes", default=None,
+                        help="comma-separated module suffixes overriding the profile")
+    parser.add_argument("--include-lm-head", action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help="include the output projection when it is untied "
+                             "(profile default otherwise)")
+    parser.add_argument("--allow-target-count-mismatch", action="store_true",
+                        help="experimental escape hatch; record the mismatch in the manifest")
     parser.add_argument("--ste", action="store_true",
                         help="ternarize the forward (T28 absmean STE) so the reported ratio is the "
                              "deployed ternary model's PPL ratio")
@@ -645,7 +900,9 @@ def main(argv=None) -> int:
                              "parameter (LSQ-style) instead of the fixed group absmean")
     parser.add_argument("--steps", type=int, default=3000)
     parser.add_argument("--seq", type=int, default=512)
-    parser.add_argument("--batch", type=int, default=2)
+    parser.add_argument("--batch", type=int, default=2,
+                        help="legacy sequential windows consumed per reshuffle; "
+                             "not a stacked/gradient-accumulation batch")
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--temp", type=float, default=2.0)
     parser.add_argument("--eval-windows", type=int, default=4,
@@ -660,9 +917,11 @@ def main(argv=None) -> int:
                              "The state_dict holds the master weights; re-wrap with the same "
                              "--ste/scale to reconstruct the deployed model.")
     parser.add_argument("--seed", type=int, default=1337)
-    parser.add_argument("--rot-seed", type=int, default=0,
-                        help="rotation PRF seed (0 = use --seed); set this to keep the basis "
-                             "fixed while varying --seed for replication")
+    parser.add_argument("--rot-seed", type=int, default=None,
+                        help="rotation PRF seed; unset follows --seed, while an explicit "
+                             "value (including 0) keeps the basis fixed across data seeds")
+    parser.add_argument("--signs-manifest", default=None,
+                        help="explicit Prism hadamard sign manifest; strict coverage, no PRF fallback")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--teacher-device", default="cuda:1")
     # Managed decay: event-driven, bounded, multiplicative LR reduction driven
@@ -692,7 +951,16 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.md_shell > 0:
         args.md_lr_scale = args.md_shell ** (args.md_q - 1) / args.lr
-    run(args)
+    try:
+        run(args)
+    except Exception as exc:
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "FAILED").write_text(
+            json.dumps({"status": "failed", "error": f"{type(exc).__name__}: {exc}"},
+                       sort_keys=True) + "\n",
+            encoding="utf-8")
+        raise
     return 0
 
 

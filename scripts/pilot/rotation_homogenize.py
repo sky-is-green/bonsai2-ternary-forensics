@@ -24,7 +24,7 @@ sys.path.insert(0, str(HB))
 
 from bonsai_forensics.rotation import absorb_input, absorb_output, rotations_for  # noqa: E402
 
-BASE = Path("/home/penis/Desktop/work/hivebench/artifacts/ternary/canary/hf")
+BASE = Path(__file__).resolve().parents[2] / "artifacts" / "ternary" / "canary" / "hf"
 SEED = 1337
 GROUP = 128
 SUFFIXES = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")

@@ -38,6 +38,7 @@ import torch
 import yaml
 
 from bonsai_forensics import gptq, pack_gguf, pq2_0, quant, rotation
+from bonsai_forensics.targets import EXCLUDED_NAME_PARTS
 
 SPEC_SHA256 = "0d2c008b4aee726351f9b90e44ec003c18b579d8690db24c77a089d9e1fc652b"
 
@@ -76,6 +77,28 @@ INPUT_ABSORBED_SUFFIXES = (
     "ffn_up.weight",
     "lm_head.weight",
     "output.weight",
+)
+# Architecture-aware extension of the frozen spec §6 role sets.  The spec sets
+# above describe the *released* 27B/PQ2_0 format and must not be edited without
+# a deliberate spec-version bump (they are pinned by
+# `tests/ternary/test_run_quant.py::test_code_roles_match_spec_sets`).  The
+# suffixes below extend classification to the architectures `targets.py`
+# advertises (Qwen3.5 Gated-DeltaNet, Phi-3 fused projections, GPT-NeoX, OPT);
+# they are additive, so the frozen contract is unchanged.
+EXTENDED_OUTPUT_ROTATED_SUFFIXES = OUTPUT_ROTATED_SUFFIXES + (
+    "dense.weight",          # GPT-NeoX attention output
+    "dense_4h_to_h.weight",  # GPT-NeoX MLP down
+    "fc2.weight",            # OPT MLP down
+)
+EXTENDED_INPUT_ABSORBED_SUFFIXES = INPUT_ABSORBED_SUFFIXES + (
+    "in_proj_qkv.weight",      # Qwen3.5 Gated-DeltaNet
+    "in_proj_z.weight",        # Qwen3.5 Gated-DeltaNet
+    "qkv_proj.weight",         # Phi-3 fused q/k/v
+    "gate_up_proj.weight",     # Phi-3 fused gate/up
+    "embed_out.weight",        # GPT-NeoX untied head
+    "query_key_value.weight",  # GPT-NeoX fused attention
+    "dense_h_to_4h.weight",    # GPT-NeoX MLP up
+    "fc1.weight",              # OPT MLP up
 )
 # T22 / spec tbr-1.1 §1.3–§3.3: hidden norms are stored as ones, their γ folds
 # into every hidden-axis consumer; F16 exemption is precision-only, so exempt
@@ -167,12 +190,13 @@ def norm_fold_map(names: Sequence[str]) -> dict[str, str]:
         if name.endswith("input_layernorm.weight"):
             prefix = name[: -len("input_layernorm.weight")]
             suffixes = ("q_proj.weight", "k_proj.weight", "v_proj.weight",
+                        "in_proj_qkv.weight", "in_proj_z.weight", "qkv_proj.weight",
                         "in_proj_a.weight", "in_proj_b.weight")
             consumers = [n for n in names if n.startswith(prefix) and n.endswith(suffixes)]
         elif name.endswith("post_attention_layernorm.weight"):
             prefix = name[: -len("post_attention_layernorm.weight")]
             consumers = [n for n in names
-                         if n.startswith(prefix) and n.endswith(("gate_proj.weight", "up_proj.weight"))]
+                         if n.startswith(prefix) and n.endswith(("gate_proj.weight", "up_proj.weight", "gate_up_proj.weight"))]
         else:  # final norm
             consumers = [n for n in names if n.endswith(("lm_head.weight", "output.weight"))]
         for consumer in consumers:
@@ -190,9 +214,9 @@ def classify_tensor(name: str, ndim: int) -> str:
         if any(name.endswith(suffix) for suffix in EXEMPT_ABSORB_SUFFIXES):
             return ROLE_EXEMPT_ROT_INPUT
         return ROLE_EXEMPT
-    if any(name.endswith(suffix) for suffix in OUTPUT_ROTATED_SUFFIXES):
+    if any(name.endswith(suffix) for suffix in EXTENDED_OUTPUT_ROTATED_SUFFIXES):
         return ROLE_ROT_OUTPUT
-    if any(name.endswith(suffix) for suffix in INPUT_ABSORBED_SUFFIXES):
+    if any(name.endswith(suffix) for suffix in EXTENDED_INPUT_ABSORBED_SUFFIXES):
         return ROLE_ROT_INPUT
     raise ValueError(f"tensor {name!r} matches no spec role; refusing to guess")
 
@@ -242,7 +266,18 @@ def _process_tensor(
         rots = rots_for(tensor.shape[1])
         rotated = rotation.absorb_input(tensor, rots)
         return {"kind": CHECKPOINT_KIND_F16, "data": np.asarray(rotated, dtype=np.float16)}
-    if role == ROLE_ROT_INPUT:
+    # Rotation-axis convention.  "role" is the legacy tbr spec: input-side
+    # suffixes rotate the input axis, output-side suffixes rotate the output
+    # axis, and the embedding rotates its hidden/output axis.  "last" is the
+    # released PQ2_0 convention: every ternary tensor rotates its last/ne0 axis,
+    # including output projections and the embedding — `prism_loader.recover`
+    # recovers all 402 tensors as `W_hf = D @ R` along the last axis.
+    axis = str(config.get("rotation", {}).get("axis", "role"))
+    if axis == "last":
+        rots = rots_for(tensor.shape[1])
+        rotated = rotation.absorb_input(tensor, rots)
+        h = rotate_hessian(hessian, rots) if hessian is not None else None
+    elif role == ROLE_ROT_INPUT:
         rots = rots_for(tensor.shape[1])
         rotated = rotation.absorb_input(tensor, rots)
         h = rotate_hessian(hessian, rots) if hessian is not None else None
@@ -418,6 +453,11 @@ def run_quant(
         if resume and entry.get("status") == "done" and _checkpoint_path(run_dir, name).exists():
             skipped.append(name)
             continue
+        # Non-text towers (vision / MTP) are outside every target profile and
+        # must not be exported or classified.
+        if any(part in EXCLUDED_NAME_PARTS for part in name.split(".")):
+            skipped.append(name)
+            continue
         started = time.time()
         tensor = source.tensor(name)
         hessian = source.hessian(name)
@@ -561,8 +601,21 @@ def load_config(path: str | Path) -> dict:
     for key in ("model", "rotation", "quant", "calibration", "output"):
         if key not in raw:
             raise ValueError(f"config missing required section {key!r}")
-    if int(raw["quant"]["group_size"]) != 256:
-        raise ValueError("primary artifact requires group_size 256 (TQ2_0, ADR-2)")
+    group_size = int(raw["quant"]["group_size"])
+    if group_size not in (128, 256):
+        raise ValueError(
+            "quant.group_size must be 256 (TQ2_0, ADR-2) or 128 (PQ2_0), "
+            f"got {group_size}"
+        )
+    if group_size == 128 and int(raw["quant"].get("refine_iters", 0)) != 0:
+        # Gate 1 (research/gate1-forensics.md): LS refinement moves 6-7% of
+        # trits away from Prism on the PQ2_0-class artifact.  The Bonsai-2
+        # aligned path must be unrefined.
+        raise ValueError(
+            "PQ2_0-class (group_size 128) requires refine_iters 0: plain absmean "
+            "RTN reproduces Prism's trits better than LS refinement "
+            "(research/gate1-forensics.md)"
+        )
     return raw
 
 

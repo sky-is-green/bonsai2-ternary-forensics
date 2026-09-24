@@ -22,6 +22,7 @@ sys.path.insert(0, str(HB / "scripts" / "pilot"))
 from rmd_kd import load_windows, wrap_rotated  # noqa: E402
 
 from bonsai_forensics.evaluate import add_ratios, evaluate_regions  # noqa: E402
+from bonsai_forensics.rotation import load_sign_manifest  # noqa: E402
 
 ATTN = ("q_proj", "k_proj", "v_proj", "o_proj")
 FFN = ("gate_proj", "up_proj", "down_proj")
@@ -36,9 +37,14 @@ def main() -> int:
     ap.add_argument("--eval-windows", type=int, default=8)
     ap.add_argument("--eval-regions", type=int, default=8)
     ap.add_argument("--seed", type=int, default=1337)
+    ap.add_argument("--target-profile", default="auto")
+    ap.add_argument("--rotation-mode", default="residual")
+    ap.add_argument("--signs-manifest", default=None)
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
+
+    sign_sets = load_sign_manifest(args.signs_manifest) if args.signs_manifest else None
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -59,7 +65,9 @@ def main() -> int:
     for name, suffixes in CONFIGS.items():
         model = AutoModelForCausalLM.from_pretrained(args.model_dir, dtype=torch.bfloat16).to(device)
         if suffixes:
-            wrap_rotated(model, seed=args.seed, ste=True, learn_scale=False, suffixes=suffixes)
+            wrap_rotated(model, seed=args.seed, ste=True, learn_scale=False,
+                         suffixes=suffixes, profile=args.target_profile,
+                         rotation_mode=args.rotation_mode, sign_sets=sign_sets)
         model.eval()
         res = add_ratios(evaluate_regions(model, corpus_ids, args.seq, regions, device), teacher_ppls)
         results[name] = {
