@@ -68,3 +68,19 @@ schedule.**
   `DSPARK-EXPORT-AUDIT.md`). Acceptance is quality-bound (draft top-1 ≈ depth-1
   accept) and the fork's host-side Markov correction dominates wall time; both
   are documented next steps, not blockers.
+
+## Shelved: the DSpark drafter track (2026-09-24)
+
+The fork-compatible Bonsai-2 DSpark drafter runs end to end, but it is
+**shelved, not pursued**. Diagnosis: acceptance is **data/domain-bound**. The
+draft is distilled on UltraChat and collapses on the harness's code/reasoning
+prompts (drafted blocks degenerate to `1`, `0`, `101010;`); context length is
+ruled out (offline top-1 flat across 32–256) and the runtime path is faithful
+(depth-1 accept equals the draft's first-token accuracy, and only 13% of misses
+have the target token anywhere in the drafted block). Separately, the runtime's
+host-side Markov correction dominates wall time on ROCm, so speedup stays below
+1 independently of quality. Reaching a *working* drafter needs on-policy data at
+scale, likely more capacity, and a ROCm correction path, i.e. a multi-day
+project with uncertain payoff. The record stands as a negative result.
+See [`DSPARK-PATH1-PLAN.md`](DSPARK-PATH1-PLAN.md) and
+[`DSPARK-EXPORT-AUDIT.md`](DSPARK-EXPORT-AUDIT.md).
