@@ -1,4 +1,4 @@
-# bonsai-ternary-forensics
+# Bonsai 2 ternary forensics
 
 [![License](https://img.shields.io/github/license/sky-is-green/bonsai2-ternary-forensics?style=flat)](https://github.com/sky-is-green/bonsai2-ternary-forensics/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/Python-3776AB?style=flat&logo=python&logoColor=white)](https://github.com/sky-is-green/bonsai2-ternary-forensics)
@@ -41,12 +41,15 @@ ThakiCloud, and it redistributes no model weights.
   signature. Rotation-in-the-loop + STE/KD + a managed schedule accounts for the
   gap. See [`docs/FORENSIC-ARCHIVE.md`](docs/FORENSIC-ARCHIVE.md).
 
-Full write-up: [`docs/WHITEPAPER.md`](docs/WHITEPAPER.md).
-Settled Mirror-Descent question and archive:
-[`docs/FORENSIC-ARCHIVE.md`](docs/FORENSIC-ARCHIVE.md).
-Every falsified route, with evidence and revisit cost:
-[`docs/FAILURES.md`](docs/FAILURES.md).
-Detailed gate reports: [`research/`](research/).
+## Start here
+
+1. [`docs/WHITEPAPER.md`](docs/WHITEPAPER.md) — the full dense-forensics write-up.
+2. [`docs/FORENSIC-ARCHIVE.md`](docs/FORENSIC-ARCHIVE.md) — the settled Mirror-Descent question.
+3. [`docs/FAILURES.md`](docs/FAILURES.md) — every falsified route, with evidence and revisit cost.
+4. [`docs/MOE-EXTENSION.md`](docs/MOE-EXTENSION.md) — the extension to Mixture-of-Experts models (does the recipe survive routing?): routing-drift measurements, the correction-placement rule, the AUTOGRID noise-floor map, and the three routes to a ternary MoE.
+
+The full documentation index is [`docs/README.md`](docs/README.md); the
+Gate-1/2/3 reports are in [`research/`](research/).
 
 ## What is here
 
@@ -59,9 +62,7 @@ scripts/pilot/           block-wise KD and data-selection pilots; the DSpark
                          drafter track (train / parity / export / benchmark)
 scripts/eval_llama_server.py  standalone smoke / perplexity evaluation
 tests/ternary/           offline test suite (synthetic tensors; no downloads)
-docs/                    white paper, failure register, forensic archive,
-                         model registry, reproducibility audit, quantization
-                         landscape, prior art, DSpark track
+docs/                    write-ups and decision records; start at docs/README.md
 research/                Gate-1/2/3 write-ups
 configs/                 run configs, pinned model registry
 ```
