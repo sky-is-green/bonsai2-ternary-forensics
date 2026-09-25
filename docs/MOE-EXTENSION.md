@@ -238,6 +238,10 @@ export).  The trained routers ride along as exact rank-64 `ffn_gate_inp` LoRA
 pairs (dense f16, +4.3 MB); they are part of the evaluated model and are worth
 including.
 
+The deployed-format tax on this base is small: training the same `attn_out`
+branches in fp32 (no STE) gives 21.11 vs 21.42 on the 8-window protocol (1.4%),
+so the 8.9 MB compact adapter is the right trade against a 67 MB dense one.
+
 End-to-end in the TAARDIS fork (mixed Q1-expert/Q8-rest GGUF,
 `wiki.test.raw`, c512, 563 chunks, GPU):
 
