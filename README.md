@@ -7,6 +7,7 @@
 [![pytest](https://img.shields.io/badge/pytest-0A9EDC?style=flat&logo=pytest&logoColor=white)](https://github.com/sky-is-green/bonsai2-ternary-forensics)
 [![Last commit](https://img.shields.io/github/last-commit/sky-is-green/bonsai2-ternary-forensics/main?style=flat&label=Last%20commit&logo=git)](https://github.com/sky-is-green/bonsai2-ternary-forensics/commits/main)
 [![Repo size](https://img.shields.io/github/repo-size/sky-is-green/bonsai2-ternary-forensics?style=flat&label=Repo%20size)](https://github.com/sky-is-green/bonsai2-ternary-forensics)
+
 Independent forensics on **Bonsai 2 27B**, Prism ML's ~2 bpw ternary model built
 from `Qwen/Qwen3.8-27B`. We recovered the storage format and rotation basis,
 localized the quality gap to trained weights, and showed that a widely cited
