@@ -58,8 +58,10 @@ harness:
    fused expert banks, materialise a HF dir for AUTOGRID and eval.
 4. **Corrections:** per-layer residual-stream branches (rank 512 to start) plus
    trainable routers, loss = LM + output KD (the router-KD term is dropped; the
-   OLMoE control showed it is a no-op).  At hidden 2048 and 40 layers, rank 512
-   is ~84M branch parameters, ~22 MB deployed at ~2.1 bpw.
+   OLMoE control showed it is a no-op).  Train with ``--quant lloyd`` so the
+   frozen body and the branches see the deployment quantizer (Q1_0_g128), and
+   ship the sidecar at ``--branch-quant g128``.  At hidden 2048 and 40 layers,
+   rank 512 is ~84M branch parameters, ~22 MB deployed at ~2.1 bpw.
 5. **Compute estimate** (rough, from the OLMoE measurements): teacher cache on
    one 80 GB card, order 1-2 h; correction training 8-10k steps on the same
    card, order 8-12 h.  No fp32-master QAT of the body is needed.

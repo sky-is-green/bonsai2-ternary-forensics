@@ -196,6 +196,29 @@ linearly, and even the 4/16 mix stays a small fraction of a ternary 35B build
 2 bits everywhere, a handful of sensitive layers at fp16, or all fp32 if the
 ~2 bpw total claim is relaxed.
 
+### 2.4d The deployable quantizer
+
+The TAARDIS fork's ternary container (`Q1_0_g128`) does not use a one-shot
+absmean scale: its quantizer refines each group scale to the Lloyd-Max / TWN
+fixed point (default-on).  On OLMoE experts that rule gives weight rel err
+0.442 against 0.517 for one-shot absmean (zero share 0.465 vs 0.312).
+
+Everything above this point used the one-shot absmean rule, so the collapse
+was measured against a harder base than deployment.  Re-running the recipe
+with the deployable quantizer:
+
+| stage | PPL (8w) | router agreement |
+|---|---|---|
+| FP teacher | 11.02 | 1.000 |
+| RTN (deployable quantizer) | 804.39 | 0.691 |
+| **+ rank-512 branches, g128 ternary sidecar** | **19.80** | **0.846** |
+
+That is a **1.8x teacher gap** with a 2.125 bpw body and an 8.9 MB sidecar,
+against 3.4x for the absmean-trained recipe.  The container matches too: a
+GGUF with ternary experts and Q8 attention measures 566 uncorrected in the
+fork, and its expert codes reproduce the torch Lloyd rule to 0.001 rel err.
+The remaining artifact step is how the branches ride along at runtime (§4).
+
 ### 2.5 Where the cheap route already works
 
 MoTE-style up-cycling (pretrained FFN kept as a frozen BF16 shared expert,
@@ -231,7 +254,7 @@ fairness rules.
 
 | route | mechanism | cost | status |
 |---|---|---|---|
-| A | in-place ternary + trained residual-stream corrections | single 80 GB card or 2x40 GB for the correction run; no 263 GB fp32-master QAT | placement rule established; best 37.11 (1081x) with 8,192-window data + LR decay; data/step budget scales with compute; sidecar 1.28-1.50x (mixed-precision dial) |
+| A | in-place ternary + trained residual-stream corrections | single 80 GB card or 2x40 GB for the correction run; no 263 GB fp32-master QAT | placement rule established; with the deployable quantizer: 19.80 (1.8x teacher gap) on the 4,096-window recipe, 8.9 MB sidecar; runtime delivery is the open step |
 | B | MoTE-style re-architecture (frozen FP component carries the function) | cheap training, larger artifact | demonstrated at 1.5B/3B |
 | C | MoE-aware mixed-precision PTQ (APEX-style) | cheapest, ~2.8 bpw | published, Bonsai-class retention |
 
@@ -239,19 +262,21 @@ Route A is the one this work opens: it reaches ternary bit budgets without the
 4xH100 QAT bill, because only the corrections train.  Open items:
 
 1. correction capacity, schedule, and data on the residual stream (rank 512
-   reaches 37.11 at 1081x with LR decay and 8,192 unique windows; rank itself
-   flattened at 512, while the data/step budget is still paying and should
-   scale with compute),
+   plus LR decay and more unique windows took the absmean recipe to 37.11; the
+   deployable quantizer then took it to 19.80, and the data/step budget is
+   still paying and should scale with compute),
 2. router-aware losses: the router-KD term is a verified no-op (the
    `--router-weight 0` control matched within ~1.5%), so the correction repairs
    the state the router reads rather than distilling its decisions,
 3. ternarising the correction sidecar: STE-trained ternary branches cost
-   1.2-1.5x PPL over fp32 depending on operating point (1.50x converged at the
-   4,096-window point); the tax is tunable with a mixed format — 2/16 and 4/16
-   fp16 layers reach 1.37x / 1.28x at 24.6 MB / 40.2 MB, so the sidecar is a
-   size/quality dial and the ~2 bpw total claim is met,
-4. serving: a grouped ternary GEMM does not exist; the dense path (Prism fork,
-   TAARDIS fork) has no MoE kernels,
+   1.2-1.5x PPL over fp32 on the absmean base; the tax is tunable with a mixed
+   format (2/16 and 4/16 fp16 layers reach 1.37x / 1.28x at 24.6 MB / 40.2 MB).
+   On the deployable-quantizer base the all-g128 ternary sidecar is included in
+   the 19.80 result, so the ~2 bpw total claim is met as shipped,
+4. serving: ternary experts run today on the TAARDIS fork (verified on CPU:
+   1.76 GB OLMoE GGUF, Q1_0_g128 expert banks); the open piece is branch
+   delivery — the best placement needs a small runtime op, or a LoRA-mappable
+   placement can be retrained (in flight),
 5. the iso-compute ladder for capacity-vs-compute separation (0.6B 51.9% and
    1.7B 63.6% on WikiText; the primary ladder closed without the 4B rung, see
    [`SCALING-PROTOCOL.md`](SCALING-PROTOCOL.md)).
@@ -276,5 +301,13 @@ moe/
   olmoe_experts.py      per-expert corrections (placement control)
   eval_ckpts.py         checkpoint trajectory + router diagnostics
   save_ternary_olmoe.py materialise a ternary build to an HF dir
+  qwen35_moe_proxy.py   qwen3_5_moe (35B-A3B) port: fused-bank STE patch, smoke
+  branch_sensitivity.py per-layer sidecar sensitivity scan
+  export_branches_lora.py pack branch checkpoints as llama.cpp LoRA adapters
   results/              the JSON evidence quoted in this document
 ```
+
+The deployable recipe trains against the deployment quantizer:
+`--quant lloyd` for the frozen body and the branches (the Q1_0_g128 rule), and
+`--branch-quant g128` for the shipped sidecar.  See `moe/README.md` for the
+full run sequence, including the `export_branches_lora.py` adapter step.
