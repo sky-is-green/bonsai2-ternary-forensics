@@ -181,10 +181,20 @@ better size/fidelity trade at equal training.
 8,192-window model ternarises one layer's branch at a time: layers 0 and 15
 cost ~3.3 PPL each, layer 13 only +0.09, the rest +0.1 to +2.8.  Single-layer
 costs are not additive (all-ternary post-hoc is catastrophic), so the test is a
-retrain: keeping layers 0 and 15 fp16 and the rest g128 reaches **67.43 (1.37x
-over fp32) at 24.6 MB / 5.86 bpw**, against 73.67 (1.50x) at 8.9 MB all-ternary
-and 49.27 at 134 MB fp32.  A four-layer fp16 variant is in flight.  The trade
-is cheap because even the mixed sidecar is ~0.3% of a ternary 35B artifact.
+retrain.  On the same recipe, at the same 8,192-step budget:
+
+| branch format | PPL (8 windows) | deployed (35.7M branches) |
+|---|---|---|
+| all g128 ternary | 73.67 (1.50x) | 8.9 MB (2.125 bpw) |
+| mixed: layers 0, 15 fp16 | 67.43 (1.37x) | 24.6 MB (5.86 bpw) |
+| **mixed: layers 0, 1, 3, 15 fp16** | **62.84 (1.28x)** | **40.2 MB (9.59 bpw)** |
+| fp32 reference (4,096-step run) | 49.27 | 134 MB |
+
+Each fp16 layer buys back ~2.5-3 PPL for ~8.4 MB, so the tax is tunable almost
+linearly, and even the 4/16 mix stays a small fraction of a ternary 35B build
+(~0.6%).  The choice for the port is a size/quality dial, not a binary:
+2 bits everywhere, a handful of sensitive layers at fp16, or all fp32 if the
+~2 bpw total claim is relaxed.
 
 ### 2.5 Where the cheap route already works
 
@@ -221,7 +231,7 @@ fairness rules.
 
 | route | mechanism | cost | status |
 |---|---|---|---|
-| A | in-place ternary + trained residual-stream corrections | single 80 GB card or 2x40 GB for the correction run; no 263 GB fp32-master QAT | placement rule established; best 37.11 (1081x) with 8,192-window data + LR decay; data/step budget scales with compute; ternary sidecar 1.2-1.5x |
+| A | in-place ternary + trained residual-stream corrections | single 80 GB card or 2x40 GB for the correction run; no 263 GB fp32-master QAT | placement rule established; best 37.11 (1081x) with 8,192-window data + LR decay; data/step budget scales with compute; sidecar 1.28-1.50x (mixed-precision dial) |
 | B | MoTE-style re-architecture (frozen FP component carries the function) | cheap training, larger artifact | demonstrated at 1.5B/3B |
 | C | MoE-aware mixed-precision PTQ (APEX-style) | cheapest, ~2.8 bpw | published, Bonsai-class retention |
 
@@ -237,9 +247,9 @@ Route A is the one this work opens: it reaches ternary bit budgets without the
    the state the router reads rather than distilling its decisions,
 3. ternarising the correction sidecar: STE-trained ternary branches cost
    1.2-1.5x PPL over fp32 depending on operating point (1.50x converged at the
-   4,096-window point) and ship at ~9 MB (2.0-2.1 bpw); a mixed sidecar with
-   layers 0 and 15 at fp16 costs 1.37x at 24.6 MB, and wider mixes are in
-   flight; the size target is met,
+   4,096-window point); the tax is tunable with a mixed format — 2/16 and 4/16
+   fp16 layers reach 1.37x / 1.28x at 24.6 MB / 40.2 MB, so the sidecar is a
+   size/quality dial and the ~2 bpw total claim is met,
 4. serving: a grouped ternary GEMM does not exist; the dense path (Prism fork,
    TAARDIS fork) has no MoE kernels,
 5. the iso-compute ladder for capacity-vs-compute separation (0.6B 51.9% and
