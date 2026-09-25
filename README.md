@@ -49,7 +49,7 @@ discussion thread: [Prism model page, discussion
 1. [`docs/WHITEPAPER.md`](docs/WHITEPAPER.md) — the full dense-forensics write-up.
 2. [`docs/FORENSIC-ARCHIVE.md`](docs/FORENSIC-ARCHIVE.md) — the settled Mirror-Descent question.
 3. [`docs/FAILURES.md`](docs/FAILURES.md) — every falsified route, with evidence and revisit cost.
-4. [`docs/MOE-EXTENSION.md`](docs/MOE-EXTENSION.md) — the extension to Mixture-of-Experts models (does the recipe survive routing?): routing-drift measurements, the correction-placement rule, the AUTOGRID noise-floor map, and the three routes to a ternary MoE.
+4. [`docs/MOE-EXTENSION.md`](docs/MOE-EXTENSION.md) — the extension to Mixture-of-Experts models (does the recipe survive routing?): routing-drift measurements, the correction-placement rule, the AUTOGRID noise-floor map, and the three routes to a ternary MoE. The harness is in [`moe/`](moe/README.md) with its result JSONs.
 
 The full documentation index is [`docs/README.md`](docs/README.md); the
 Gate-1/2/3 reports are in [`research/`](research/).
@@ -66,6 +66,8 @@ scripts/pilot/           block-wise KD and data-selection pilots; the DSpark
 scripts/eval_llama_server.py  standalone smoke / perplexity evaluation
 tests/ternary/           offline test suite (synthetic tensors; no downloads)
 docs/                    write-ups and decision records; start at docs/README.md
+moe/                     MoE ternary harness (routing probe, correction
+                         branches, STE branch formats) + result JSONs
 research/                Gate-1/2/3 write-ups
 configs/                 run configs, pinned model registry
 ```

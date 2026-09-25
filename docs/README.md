@@ -17,6 +17,7 @@ reproduction commands.
 | document | what it is |
 |---|---|
 | [MOE-EXTENSION.md](MOE-EXTENSION.md) | Ternary on a pretrained MoE: routing drift, the correction-placement rule, the AUTOGRID noise-floor map, and the three routes to a ternary MoE |
+| [../moe/README.md](../moe/README.md) | The harness: router-drift probe, correction-branch trainers, STE branch formats, and the result JSONs |
 
 ## Format, quantizer, and gates
 

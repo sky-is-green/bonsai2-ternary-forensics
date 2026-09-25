@@ -25,7 +25,7 @@ models have two, and the second one is not a capacity problem:
 sparse, and top-k selection is non-differentiable.  Neither property exists in
 the dense case.
 
-## 2. Measurements (all local, artifacts under `hivebench/artifacts/ternary/moe`; the harness lives in the private research tree, see §5)
+## 2. Measurements (all local; the harness is in [`moe/`](../moe/) and the result JSONs under [`moe/results/`](../moe/results/))
 
 ### 2.1 Routing drift is real and compounds
 
@@ -199,12 +199,11 @@ Route A is the one this work opens: it reaches ternary bit budgets without the
 
 ## 5. Reproduce
 
-The MoE runs live in the private research tree (`hivebench/`), which is not
-published; this section records the harness for provenance and audit.  The
-dense-forensics scripts in this repository are self-contained.
+The harness is in [`../moe/`](../moe/) (see [`moe/README.md`](../moe/README.md)),
+with the result JSONs under [`../moe/results/`](../moe/results/):
 
 ```
-hivebench/experiments/moe_ternary/
+moe/
   gguf_header.py        remote GGUF header census over HTTP range requests
   role_map.py           MoE role map + ternary projection (8.82 GiB / 2.186 bpw)
   probe_router.py       E1 routing-drift prefix probe
@@ -215,6 +214,5 @@ hivebench/experiments/moe_ternary/
   olmoe_experts.py      per-expert corrections (placement control)
   eval_ckpts.py         checkpoint trajectory + router diagnostics
   save_ternary_olmoe.py materialise a ternary build to an HF dir
+  results/              the JSON evidence quoted in this document
 ```
-
-Artifacts and write-ups: `hivebench/RESEARCH/moe-ternary-plan.md` (private).
