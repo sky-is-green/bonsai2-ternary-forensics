@@ -101,3 +101,89 @@ def test_gpt_neox_projection_only_excludes_embed_out():
 def test_unknown_profile_is_explicit():
     with pytest.raises(ValueError, match="unknown target profile"):
         get_profile("not-an-architecture")
+
+
+def _moe_mlp():
+    """The qwen3_5_moe MLP block: fused routed experts + shared expert."""
+    mlp = torch.nn.Module()
+    mlp.gate = torch.nn.Linear(128, 8, bias=False)  # router, stays FP
+    experts = torch.nn.Module()
+    experts.gate_up_proj = torch.nn.Parameter(torch.zeros(8, 256, 128))
+    experts.down_proj = torch.nn.Parameter(torch.zeros(8, 128, 128))
+    mlp.experts = experts
+    mlp.shared_expert = torch.nn.ModuleDict({
+        "gate_proj": torch.nn.Linear(128, 256, bias=False),
+        "up_proj": torch.nn.Linear(128, 256, bias=False),
+        "down_proj": torch.nn.Linear(256, 128, bias=False),
+    })
+    mlp.shared_expert_gate = torch.nn.Linear(128, 1, bias=False)
+    return mlp
+
+
+class _MoEGDNChild(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear_attn = torch.nn.ModuleDict({
+            "in_proj_qkv": torch.nn.Linear(128, 256, bias=False),
+            "in_proj_z": torch.nn.Linear(128, 128, bias=False),
+            "out_proj": torch.nn.Linear(128, 128, bias=False),
+        })
+        self.mlp = _moe_mlp()
+
+
+class _MoEAttnChild(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.self_attn = torch.nn.ModuleDict({
+            "q_proj": torch.nn.Linear(128, 128, bias=False),
+            "k_proj": torch.nn.Linear(128, 64, bias=False),
+            "v_proj": torch.nn.Linear(128, 64, bias=False),
+            "o_proj": torch.nn.Linear(128, 128, bias=False),
+        })
+        self.mlp = _moe_mlp()
+
+
+class _MoEModel(torch.nn.Module):
+    def __init__(self, layer_types=("linear_attention", "full_attention")):
+        super().__init__()
+        self.config = SimpleNamespace(
+            model_type="qwen3_5_moe_text",
+            tie_word_embeddings=False,
+            num_hidden_layers=len(layer_types),
+            layer_types=list(layer_types),
+        )
+        kinds = {"linear_attention": _MoEGDNChild, "full_attention": _MoEAttnChild}
+        self.layers = torch.nn.ModuleList([kinds[t]() for t in layer_types])
+        self.lm_head = torch.nn.Linear(128, 256, bias=False)
+
+
+def test_qwen35_moe_selects_attention_shared_expert_and_head():
+    model = _MoEModel()
+    names = [name for name, _ in select_target_linears(model, profile="auto")]
+    assert "layers.0.linear_attn.in_proj_qkv" in names
+    assert "layers.0.linear_attn.out_proj" in names
+    assert "layers.1.self_attn.q_proj" in names
+    assert "layers.0.mlp.shared_expert.gate_proj" in names
+    assert "layers.0.mlp.shared_expert.down_proj" in names
+    assert "lm_head" in names
+    # the router, its shared scalar, and the fused expert banks are not targets
+    assert not any(name.endswith("mlp.gate") for name in names)
+    assert not any("shared_expert_gate" in name for name in names)
+    assert not any("experts." in name for name in names)
+
+
+def test_qwen35_moe_expected_count_and_coverage():
+    report = target_coverage(_MoEModel(), profile="auto")
+    assert report["profile"] == "qwen3_5_moe"
+    # 3 GDN + 4 full-attention projections, 3 shared-expert linears per layer,
+    # plus the untied lm_head.
+    assert report["expected_selected_linear_tensors"] == 3 + 4 + 2 * 3 + 1
+    assert report["target_count_ok"] is True
+    assert report["selected_linear_tensors"] == report["expected_selected_linear_tensors"]
+
+
+def test_unrecognised_moe_still_fails_explicitly():
+    model = _MoEModel()
+    model.config.model_type = "qwen3_6_moe_text"
+    with pytest.raises(ValueError, match="mixture-of-experts"):
+        select_target_linears(model, profile="auto")

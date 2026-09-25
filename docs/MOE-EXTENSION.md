@@ -226,6 +226,9 @@ Route A is the one this work opens: it reaches ternary bit budgets without the
    1.7B 63.6% on WikiText; the primary ladder closed without the 4B rung, see
    [`SCALING-PROTOCOL.md`](SCALING-PROTOCOL.md)).
 
+The port plan for the real target lives with the harness:
+[`../moe/PORT-QWEN35.md`](../moe/PORT-QWEN35.md).
+
 ## 5. Reproduce
 
 The harness is in [`../moe/`](../moe/) (see [`moe/README.md`](../moe/README.md)),

@@ -121,6 +121,27 @@ QWEN3_5 = TargetProfile(
     description="Qwen3.5/Qwen3.8 text decoder, including Gated-DeltaNet projections.",
 )
 
+# Qwen3.5-MoE (qwen3_5_moe): the architecture of the 35B-A3B distill used by
+# the MoE extension.  Every layer carries a fused routed-expert bank
+# (``experts.gate_up_proj`` / ``experts.down_proj`` parameters, 256 experts,
+# top-8) plus a dense shared expert with ordinary gate/up/down linears.  The
+# nn.Linear vocabulary is therefore the same as Qwen3.5 dense (attention or
+# GDN projections + three shared-expert projections); the expert banks are
+# selected by the MoE scripts, and the router gate (``mlp.gate``) and its
+# shared-expert scalar stay FP.
+QWEN3_5_MOE = TargetProfile(
+    name="qwen3_5_moe",
+    suffixes=_QWEN3_5_SUFFIXES,
+    input_suffixes=frozenset({"in_proj_qkv", "in_proj_z", "q_proj", "k_proj", "v_proj", "gate_proj", "up_proj"}),
+    output_suffixes=frozenset({"out_proj", "o_proj", "down_proj"}),
+    include_lm_head=None,
+    description=(
+        "Qwen3.5-MoE text decoder: GDN/full-attention linears plus the dense "
+        "shared expert.  Routed experts are fused parameters handled by the "
+        "MoE scripts, not by the nn.Linear selector; the router gate stays FP."
+    ),
+)
+
 # Phi-3 fuses q/k/v and gate/up.  The fused output rows are still ordinary
 # nn.Linear matrices, so the same input-axis rotation applies to each.
 PHI3 = TargetProfile(
@@ -152,7 +173,7 @@ OPT = TargetProfile(
 
 PROFILES: dict[str, TargetProfile] = {
     profile.name: profile
-    for profile in (QWEN3, LLAMA, MISTRAL, OLMO2, QWEN3_5, PHI3, GPT_NEOX, OPT)
+    for profile in (QWEN3, LLAMA, MISTRAL, OLMO2, QWEN3_5, QWEN3_5_MOE, PHI3, GPT_NEOX, OPT)
 }
 _AUTO_ALIASES = {
     "qwen3": "qwen3",
@@ -165,6 +186,10 @@ _AUTO_ALIASES = {
     "qwen3.5": "qwen3_5",
     "qwen3_5_text": "qwen3_5",
     "qwen3.8": "qwen3_5",
+    "qwen3_5_moe": "qwen3_5_moe",
+    "qwen3_5_moe_text": "qwen3_5_moe",
+    "qwen35_moe": "qwen3_5_moe",
+    "qwen3.5_moe": "qwen3_5_moe",
     "phi3": "phi3",
     "phi-3": "phi3",
     "gpt_neox": "gpt_neox",
@@ -192,7 +217,13 @@ def _model_type(model_or_config) -> str:
 def _detect_profile(model_or_config) -> TargetProfile:
     model_type = _model_type(model_or_config)
     cls_name = type(model_or_config).__name__.lower()
-    # Mixture-of-experts checkpoints (e.g. qwen3_5_moe_text) are not supported
+    # Qwen3.5-MoE has its own profile: the dense nn.Linear vocabulary is the
+    # Qwen3.5 one plus the shared expert, while the routed-expert banks are
+    # fused parameters the MoE scripts handle separately.
+    if ("qwen3_5_moe" in model_type or "qwen35_moe" in model_type
+            or "qwen3_5_moe" in cls_name):
+        return QWEN3_5_MOE
+    # Other Mixture-of-experts checkpoints (e.g. qwen3_6_moe) are not supported
     # by any dense target profile.  Fail explicitly instead of silently selecting
     # a dense suffix set on an expert-routed model.
     if "moe" in model_type or "moe" in cls_name:
@@ -326,13 +357,13 @@ def expected_target_tensors(model: torch.nn.Module, profile: TargetProfile,
         return None
     if profile.name == "qwen3":
         return 7 * layers + int(include_lm_head)
-    if profile.name == "qwen3_5":
+    if profile.name in {"qwen3_5", "qwen3_5_moe"}:
         text_config = getattr(config, "text_config", config)
         layer_types = getattr(text_config, "layer_types", None)
         full_layers = sum(1 for value in (layer_types or ["full_attention"] * layers)
                           if "full" in str(value))
         # Three linear-attention projections, four full-attention projections,
-        # and three MLP projections per layer, with the latter counted once.
+        # and three MLP (or dense shared-expert) projections per layer.
         return 6 * layers + full_layers + int(include_lm_head)
     if profile.name in {"llama", "mistral", "olmo2"}:
         return 7 * layers + int(include_lm_head)
@@ -425,7 +456,8 @@ def target_coverage(model: torch.nn.Module, profile: str | TargetProfile = "auto
 
 __all__ = [
     "EXCLUDED_NAME_PARTS",
-    "GPT_NEOX", "LLAMA", "MISTRAL", "OLMO2", "OPT", "PHI3", "PROFILES", "QWEN3", "QWEN3_5",
+    "GPT_NEOX", "LLAMA", "MISTRAL", "OLMO2", "OPT", "PHI3", "PROFILES",
+    "QWEN3", "QWEN3_5", "QWEN3_5_MOE",
     "TargetProfile", "expected_target_tensors", "get_profile", "infer_profile", "is_target_name",
     "iter_linear_modules", "resolve_include_lm_head", "select_target_linears",
     "target_coverage", "target_side",

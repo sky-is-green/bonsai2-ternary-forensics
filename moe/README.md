@@ -30,6 +30,10 @@ Two targets:
 evals, the E1 routing probe, the rotation comparison, the AUTOGRID scans, and
 the 35B role maps.
 
+[`PORT-QWEN35.md`](PORT-QWEN35.md) is the plan for the real target
+(`qwen3_5_moe`, 35B-A3B): validated target inventory, required harness
+changes, cache/build/correction plan, and the local smoke-test sequence.
+
 ## Setup
 
 All scripts read and write one artifact root, `$MOE_ARTIFACTS` (default:
