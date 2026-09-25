@@ -71,7 +71,7 @@ loss (LM + output KD + router KD), same 1024 steps unless noted:
 | RTN, no corrections | - | 40,121 | 0.463 |
 | per-layer branches (residual stream), rank 64 | 6.29M | 253.85 | 0.506 |
 | per-layer branches, rank 256, 2048 steps | 18.9M | 85.50 | 0.674 |
-| **per-layer branches, rank 512, 4096 steps** | **35.7M** | **71.14** (best, step 2000; 75.64 at 4096) | **0.710** (0.726 at 4096) |
+| per-layer branches, rank 512, 4096 steps (512-window recipe) | 35.7M | 71.14 (best, step 2000; 75.64 at 4096) | 0.710 (0.726 at 4096) |
 | per-expert branches (inside experts), rank 8 | 52.4M | 6,551.74 | 0.425 |
 
 Trainable counts include the trainable routers (2.1M of the totals).  The
@@ -93,11 +93,37 @@ from 0.506 to 0.674; rank 512 improves the best 8-window PPL again, to 71.14
 run turns over: PPL is 71.14 at step 2000 and 75.64 at step 4096, while router
 agreement keeps climbing (0.710 -> 0.726).  More capacity buys a lower floor;
 the last stretch is not a capacity problem.  At the rank-512 best the teacher
-gap is 6.5x (11.02 vs 71.14), and the best checkpoint is not the last one.
+gap is 6.5x (11.02 vs 71.14), the best checkpoint is not the last one, and the
+remaining levers are schedule and data, below.
 
 **Design rule: for the routing bottleneck, corrections must live on the
 residual stream, not inside the experts.**  TAARDIS's per-matmul placement was
 derived on a dense model with no routing, so it does not transfer.
+
+### 2.4a The last levers: schedule, data, and the router-KD control
+
+Two levers — LR decay and more unique distillation data — took the same
+rank-512 recipe from 71.14 to 49.27 (8-window PPL, 814x recovery, teacher gap
+4.5x):
+
+| change | PPL (step 4096) | router agreement |
+|---|---|---|
+| rank 512, 512 windows, constant LR (reference) | 71.14 (best, step 2000; 75.64 at 4096) | 0.710 |
+| + LR decay after half-time (halve every 500 steps from step 2000) | 68.32 | 0.721 |
+| + 2,048 unique windows (2 epochs) | 51.59 | 0.726 |
+| **+ 4,096 unique windows (1 epoch)** | **49.27** | **0.724** |
+
+The 512-window run was overfitting to the fixed cache: PPL turned over after
+step 2000 (71.14 -> 75.64) while routing agreement kept rising.  LR decay
+removed the turnover; more unique distillation text removed most of the
+residual gap.  The data slope is still positive at 4,096 windows but clearly
+diminishing (-24% per doubling at 512 -> 2,048, -4% at 2,048 -> 4,096).
+
+The router-KD term turned out to be a no-op on this stack: a `--router-weight
+0` control matched the KD-on trajectory within ~1.5% at every checkpoint,
+including the same late turnover.  Routing-agreement recovery comes from
+repairing the state the router reads, not from distilling its decisions.  The
+recipe drops the term.
 
 ### 2.4b The AUTOGRID map (noise-floor classification)
 
@@ -121,8 +147,8 @@ The design rule puts the corrections on the residual stream; the remaining
 artifact question is whether they can be stored at ternary-class bit widths.
 TAARDIS V3 ships its branches ternarised per rank component at ~2 bits per
 factor.  Both that per-rank format and our g128 expert format were trained with
-straight-through estimation on the rank-512 recipe (2048 steps, evaluated at
-the 2000-step point with the 8-window protocol):
+straight-through estimation on the rank-512 recipe.  At the 512-window
+operating point, at matched steps:
 
 | branch format | PPL | router agreement | deployed size (35.7M branches) |
 |---|---|---|---|
@@ -135,9 +161,12 @@ the 2000-step point with the 8-window protocol):
 Post-hoc ternarisation alone is not viable (14-25x PPL).  Training in the
 deployed format recovers most of it: the g128 sidecar costs 1.31x over the fp32
 reference (93.47 vs 71.14 at the same 2000-step point) and the per-rank format
-1.51x; both are still descending at 2048 steps, so longer training should close
-more.  The sidecar is ~9 MB either way, under 0.5% of a ternary artifact, so the
-~2 bpw total claim survives; g128 is the better size/fidelity trade at equal
+1.51x.  The cost is not a constant: with the stronger schedule and data of
+§2.4a, the g128 sidecar reaches 76.75 on the 4,096-window recipe against fp32
+49.27 — 1.56x, and still descending at 4,096 steps, so that figure is an upper
+bound.  The ternary constraint bites harder as the base correction gets
+better.  Either way the sidecar is ~9 MB, under 0.5% of a ternary artifact, so
+the ~2 bpw total claim holds; g128 is the better size/fidelity trade at equal
 training.
 
 ### 2.5 Where the cheap route already works
@@ -175,22 +204,22 @@ fairness rules.
 
 | route | mechanism | cost | status |
 |---|---|---|---|
-| A | in-place ternary + trained residual-stream corrections | single 80 GB card or 2x40 GB for the correction run; no 263 GB fp32-master QAT | placement rule established; rank scaling flat (best 71.14 at rank 512); ternary sidecar at ~2.1 bpw costs 1.31x (STE) |
+| A | in-place ternary + trained residual-stream corrections | single 80 GB card or 2x40 GB for the correction run; no 263 GB fp32-master QAT | placement rule established; rank scaling flat; best 49.27 (814x) with 4,096-window data + LR decay; ternary sidecar at ~2.1 bpw costs 1.2-1.6x (STE, still descending) |
 | B | MoTE-style re-architecture (frozen FP component carries the function) | cheap training, larger artifact | demonstrated at 1.5B/3B |
 | C | MoE-aware mixed-precision PTQ (APEX-style) | cheapest, ~2.8 bpw | published, Bonsai-class retention |
 
 Route A is the one this work opens: it reaches ternary bit budgets without the
 4xH100 QAT bill, because only the corrections train.  Open items:
 
-1. correction capacity and rank allocation on the residual stream (rank 512
-   reaches a best 8-window PPL of 71.14 at step 2000, then turns over; the
-   rank/step curve has flattened, so the next question is loss and checkpoint
-   selection rather than more capacity),
-2. router-aware losses: the router KD term did not improve agreement at the
-   budgets tried, so the correction has to repair the state the router reads,
-3. ternarising the correction sidecar: STE-trained ternary branches cost 1.31x
-   PPL (g128) or 1.51x (per-rank) over fp32 at equal steps, and ship at ~9 MB
-   (2.0-2.1 bpw); the size target is met,
+1. correction capacity, schedule, and data on the residual stream (rank 512
+   reaches 49.27 at 814x with LR decay and 4,096 unique windows; rank itself
+   flattened at 512, and the data slope is positive but diminishing),
+2. router-aware losses: the router-KD term is a verified no-op (the
+   `--router-weight 0` control matched within ~1.5%), so the correction repairs
+   the state the router reads rather than distilling its decisions,
+3. ternarising the correction sidecar: STE-trained ternary branches cost
+   1.2-1.6x PPL over fp32 depending on operating point (still descending at
+   the stronger one) and ship at ~9 MB (2.0-2.1 bpw); the size target is met,
 4. serving: a grouped ternary GEMM does not exist; the dense path (Prism fork,
    TAARDIS fork) has no MoE kernels,
 5. the iso-compute ladder for capacity-vs-compute separation (0.6B 51.9% and
