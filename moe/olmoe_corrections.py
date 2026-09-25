@@ -219,7 +219,11 @@ def quick_eval(model, data, args, ref=None):
 
 def train(args):
     model, tok = build(args)
-    cache = torch.load(CACHE, map_location="cpu")
+    cache_path = getattr(args, "cache_file", "") or CACHE
+    cache = torch.load(cache_path, map_location="cpu")
+    if len(cache) != args.windows:
+        print(f"warning: cache {cache_path} has {len(cache)} windows but "
+              f"--windows {args.windows}; KD targets will not line up", flush=True)
     data = windows(tok, args.windows, args.seq, args.seed,
                    max_chars=args.corpus_chars)
     # teacher router reference for the agreement metric
@@ -378,6 +382,9 @@ def main():
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--device-map", default="cuda:0")
     ap.add_argument("--windows", type=int, default=512)
+    ap.add_argument("--cache-file", default="",
+                    help="teacher cache to train against (default: teacher-cache.pt); "
+                         "--windows must match the cache window count")
     ap.add_argument("--corpus-chars", type=int, default=10_000_000,
                     help="fineweb character buffer; must match the cache build")
     ap.add_argument("--eval-windows", type=int, default=8)
