@@ -16,6 +16,9 @@ and the metadata:
 The exported factors are ternarised with the same deployed quantizer used in
 training/eval (``--deploy-quant`` / ``--branch-quant``, mirroring
 ``CorrectionBranch._weights``), so the adapter reproduces the eval numbers.
+``--dtype q1_0_g128`` packs them in the fork's native 2.125 bpw layout
+(8.9 MB for rank 512 x 16 layers, bit-exact with the f16 export); it needs the
+fork's ``gguf-py`` on ``PYTHONPATH`` for the custom tensor type.
 
 The ``moe_out`` placement has no linear tensor to attach to and is refused:
 that placement needs a runtime op rather than a LoRA.
@@ -61,6 +64,37 @@ def deploy_weights(down: torch.Tensor, up: torch.Tensor, quant: str,
     return qd, qu * (s * t)[None, :]
 
 
+def pack_q1_0_g128(w: torch.Tensor, group: int = 128) -> np.ndarray:
+    """Pack deployed ternary values into the fork's Q1_0_g128 byte layout.
+
+    Per 128 weights: fp16 scale (2 bytes) then 32 bytes of 2-bit codes,
+    code = q + 1 stored at bits ``2 * (j % 4)`` of byte ``j // 4``
+    (ggml-common.h ``block_q1_0_g128``).  The scale is recovered as
+    ``max|w|`` of the group, which is exact because the deployed values are
+    ``q * fp16(scale)`` (see ``ternary_lloyd``).
+    """
+    assert w.shape[-1] % group == 0, w.shape
+    g = w.float().reshape(*w.shape[:-1], w.shape[-1] // group, group)
+    scale = g.abs().amax(-1).half()                       # [..., n_groups]
+    q = torch.clamp(torch.round(g / scale.float().unsqueeze(-1).clamp_min(1e-12)),
+                    -1, 1).to(torch.uint8) + 1            # {0,1,2}
+    q = q.reshape(*q.shape[:-1], group // 4, 4)
+    codes = q[..., 0] | (q[..., 1] << 2) | (q[..., 2] << 4) | (q[..., 3] << 6)
+    sb = scale.numpy().view(np.uint8).reshape(*scale.shape, 2)
+    out = np.concatenate([sb, codes.numpy().astype(np.uint8)], axis=-1)
+    return np.ascontiguousarray(out.reshape(*w.shape[:-1], -1))
+
+
+def add_factor(w: GGUFWriter, name: str, tensor: torch.Tensor, dtype: str,
+               raw_qtype) -> None:
+    """Add one lora factor; quantised dtypes are packed, dense ones cast."""
+    if dtype == "q1_0_g128":
+        w.add_tensor(name, pack_q1_0_g128(tensor), raw_dtype=raw_qtype)
+    else:
+        np_dtype = np.float16 if dtype == "f16" else np.float32
+        w.add_tensor(name, np.ascontiguousarray(tensor.float().numpy()).astype(np_dtype))
+
+
 def load_base_routers(base_model: str) -> dict:
     """Load ``model.layers.N.mlp.gate.weight`` from an HF safetensors dir or .pt file."""
     path = Path(base_model)
@@ -88,7 +122,9 @@ def main():
     ap.add_argument("--target", choices=["attn_out", "moe_out"], default="attn_out")
     ap.add_argument("--taardis", action="store_true",
                     help="declare taardis-lora instead of plain lora")
-    ap.add_argument("--dtype", choices=["f16", "f32"], default="f16")
+    ap.add_argument("--dtype", choices=["f16", "f32", "q1_0_g128"], default="f16",
+                    help="'q1_0_g128' packs the deployed ternary factors in the fork's "
+                         "native format (~2.125 bpw; needs the fork's gguf-py on PYTHONPATH)")
     ap.add_argument("--deploy-quant", choices=["lloyd", "absmean"], default="lloyd",
                     help="scale rule for ternarising the factors (default: the deployed rule)")
     ap.add_argument("--branch-quant", choices=["g128", "rank", "none"], default="g128",
@@ -128,17 +164,18 @@ def main():
     w.add_string("adapter.type", "taardis-lora" if args.taardis else "lora")
     w.add_float32("adapter.lora.alpha", 0.0)
 
-    data_dtype = np.float16 if args.dtype == "f16" else np.float32
+    raw_qtype = None
+    if args.dtype == "q1_0_g128":
+        from gguf import GGMLQuantizationType
+        raw_qtype = GGMLQuantizationType.Q1_0_g128
+    dense_dtype = np.float32 if args.dtype == "f32" else np.float16
+
     for i in layers:
         down, up = deploy_weights(downs[i], ups[i], args.branch_quant, args.deploy_quant)
-        down = down.float().numpy()    # [rank, in]
-        up = up.float().numpy()        # [out, rank]
         # gguf-py reverses dims on write: passing [rank, in] / [out, rank]
         # stores ne [in, rank] / [rank, out], matching the reference adapters.
-        w.add_tensor(f"blk.{i}.attn_output.weight.lora_a",
-                     np.ascontiguousarray(down).astype(data_dtype))
-        w.add_tensor(f"blk.{i}.attn_output.weight.lora_b",
-                     np.ascontiguousarray(up).astype(data_dtype))
+        add_factor(w, f"blk.{i}.attn_output.weight.lora_a", down, args.dtype, raw_qtype)
+        add_factor(w, f"blk.{i}.attn_output.weight.lora_b", up, args.dtype, raw_qtype)
 
     if args.routers:
         base = load_base_routers(args.base_model)
@@ -152,11 +189,11 @@ def main():
             b = (u * s[None, :]).numpy()                 # [out, rank]
             i = layer_index(key)
             w.add_tensor(f"blk.{i}.ffn_gate_inp.weight.lora_a",
-                         np.ascontiguousarray(a).astype(data_dtype))
+                         np.ascontiguousarray(a).astype(dense_dtype))
             w.add_tensor(f"blk.{i}.ffn_gate_inp.weight.lora_b",
-                         np.ascontiguousarray(b).astype(data_dtype))
+                         np.ascontiguousarray(b).astype(dense_dtype))
             n_routers += 1
-        print(f"exported {n_routers} router deltas (rank {a.shape[0]})")
+        print(f"exported {n_routers} router deltas (rank {a.shape[0]}, dense)")
 
     w.write_header_to_file()
     w.write_kv_data_to_file()
