@@ -103,21 +103,25 @@ derived on a dense model with no routing, so it does not transfer.
 ### 2.4a The last levers: schedule, data, and the router-KD control
 
 Two levers — LR decay and more unique distillation data — took the same
-rank-512 recipe from 71.14 to 49.27 (8-window PPL, 814x recovery, teacher gap
-4.5x):
+rank-512 recipe from 71.14 to 37.11 (8-window PPL, 1081x recovery, teacher gap
+3.4x):
 
-| change | PPL (step 4096) | router agreement |
+| change | PPL (8 windows) | router agreement |
 |---|---|---|
 | rank 512, 512 windows, constant LR (reference) | 71.14 (best, step 2000; 75.64 at 4096) | 0.710 |
-| + LR decay after half-time (halve every 500 steps from step 2000) | 68.32 | 0.721 |
-| + 2,048 unique windows (2 epochs) | 51.59 | 0.726 |
-| **+ 4,096 unique windows (1 epoch)** | **49.27** | **0.724** |
+| + LR decay after half-time | 68.32 (step 4096) | 0.721 |
+| + 2,048 unique windows (2 epochs) | 51.59 (step 4096) | 0.726 |
+| + 4,096 unique windows (1 epoch) | 49.27 (step 4096) | 0.724 |
+| **+ 8,192 unique windows (1 epoch, decay from half-time)** | **37.11 (step 8192)** | **0.752** |
 
 The 512-window run was overfitting to the fixed cache: PPL turned over after
 step 2000 (71.14 -> 75.64) while routing agreement kept rising.  LR decay
 removed the turnover; more unique distillation text removed most of the
-residual gap.  The data slope is still positive at 4,096 windows but clearly
-diminishing (-24% per doubling at 512 -> 2,048, -4% at 2,048 -> 4,096).
+residual gap.  The data slope is still positive: -24% for the first 4x of
+data, -4% for the next 2x at fixed steps, and **-25% for 8,192 windows when
+the step budget is doubled with it** (37.11, still descending at 8,192).  The
+port's data budget should scale with its compute budget, not stop at the proxy
+budget.
 
 The router-KD term turned out to be a no-op on this stack: a `--router-weight
 0` control matched the KD-on trajectory within ~1.5% at every checkpoint,
@@ -163,9 +167,12 @@ deployed format recovers most of it: the g128 sidecar costs 1.31x over the fp32
 reference (93.47 vs 71.14 at the same 2000-step point) and the per-rank format
 1.51x.  The cost is not a constant: on the stronger schedule and data of §2.4a
 the g128 sidecar reaches 76.75 at 4,096 steps (1.56x) and then plateaus at
-**73.67 by step 8,000 — 1.50x converged**, 545x recovery from the in-place
-collapse.  The plateau says the ternary constraint is a representational tax at
-this operating point, not an optimisation shortfall.  (Repeats of the
+**73.67 by step 8,000 — 1.50x converged** against the 4,096-window fp32 run
+(49.27), 545x recovery from the in-place collapse.  The plateau says the
+ternary constraint is a representational tax at that operating point, not an
+optimisation shortfall.  (The fp32 recipe has since improved to 37.11 on
+8,192 windows, §2.4a; the sidecar at that newest operating point is not yet
+measured — a mixed-precision sidecar is the next test.  Repeats of the
 4,096-step point differ by ~3%, so the ratio is ~1.5x rather than an exact
 figure.)  Either way the sidecar is ~9 MB, under 0.5% of a ternary artifact, so
 the ~2 bpw total claim holds; g128 is the better size/fidelity trade at equal
@@ -206,7 +213,7 @@ fairness rules.
 
 | route | mechanism | cost | status |
 |---|---|---|---|
-| A | in-place ternary + trained residual-stream corrections | single 80 GB card or 2x40 GB for the correction run; no 263 GB fp32-master QAT | placement rule established; rank scaling flat; best 49.27 (814x) with 4,096-window data + LR decay; ternary sidecar at ~2.1 bpw costs 1.2-1.5x (1.50x converged) |
+| A | in-place ternary + trained residual-stream corrections | single 80 GB card or 2x40 GB for the correction run; no 263 GB fp32-master QAT | placement rule established; best 37.11 (1081x) with 8,192-window data + LR decay; data/step budget scales with compute; ternary sidecar 1.2-1.5x |
 | B | MoTE-style re-architecture (frozen FP component carries the function) | cheap training, larger artifact | demonstrated at 1.5B/3B |
 | C | MoE-aware mixed-precision PTQ (APEX-style) | cheapest, ~2.8 bpw | published, Bonsai-class retention |
 
@@ -214,8 +221,9 @@ Route A is the one this work opens: it reaches ternary bit budgets without the
 4xH100 QAT bill, because only the corrections train.  Open items:
 
 1. correction capacity, schedule, and data on the residual stream (rank 512
-   reaches 49.27 at 814x with LR decay and 4,096 unique windows; rank itself
-   flattened at 512, and the data slope is positive but diminishing),
+   reaches 37.11 at 1081x with LR decay and 8,192 unique windows; rank itself
+   flattened at 512, while the data/step budget is still paying and should
+   scale with compute),
 2. router-aware losses: the router-KD term is a verified no-op (the
    `--router-weight 0` control matched within ~1.5%), so the correction repairs
    the state the router reads rather than distilling its decisions,
