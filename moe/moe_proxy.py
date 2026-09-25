@@ -48,6 +48,51 @@ def ternary_absmean(w: torch.Tensor, group: int = 128) -> torch.Tensor:
     return q.reshape(w.shape)
 
 
+def _lloyd_scale(g: torch.Tensor, mean: torch.Tensor) -> torch.Tensor:
+    """Lloyd-Max / TWN fixed-point group scale, matching the Q1_0_g128 rule.
+
+    Iterates ``a <- mean(|w| : |w| > a/2)`` from four starts and keeps the one
+    with the best residual reduction ``s1^2/sw``.
+    """
+    best_a = mean.clone()
+    best_obj = torch.full_like(mean, -1.0)
+    for init in (0.5, 0.7, 0.9, 1.1):
+        a = init * mean
+        s1 = torch.zeros_like(mean)
+        sw = torch.zeros_like(mean)
+        for _ in range(8):
+            mask = g.abs() > 0.5 * a.unsqueeze(-1)
+            s1 = (g.abs() * mask).sum(-1)
+            sw = mask.sum(-1).float()
+            a = torch.where(sw > 0, s1 / sw, torch.zeros_like(a))
+        obj = torch.where(sw > 0, s1 * s1 / sw.clamp_min(1e-9), torch.zeros_like(s1))
+        take = obj > best_obj
+        best_obj = torch.where(take, obj, best_obj)
+        best_a = torch.where(take, a, best_a)
+    return torch.where(best_a > 0, best_a, mean)
+
+
+def ternary_lloyd(w: torch.Tensor, group: int = 128) -> torch.Tensor:
+    """Ternary with Lloyd-refined per-group scales (the deployable rule).
+
+    Same storage as ``ternary_absmean`` (2-bit codes + fp16 scale per group),
+    but the scale is the fixed point the TAARDIS Q1_0_g128 quantizer uses
+    (Lloyd-Max refinement; default-on in that fork).  The fp16 round-trip of
+    the scale is reproduced here so training sees exactly the deployed scale.
+
+    Independent torch reimplementation of the rule in the TAARDIS llama.cpp
+    fork (MIT; see NOTICE), not a code copy.
+    """
+    if group <= 0 or w.shape[-1] % group != 0:
+        group = w.shape[-1]
+    g = w.float().reshape(*w.shape[:-1], w.shape[-1] // group, group)
+    mean = g.abs().mean(-1)
+    a = _lloyd_scale(g, mean)
+    a = a.half().float()
+    q = torch.clamp(torch.round(g / a.unsqueeze(-1).clamp_min(1e-12)), -1, 1)
+    return (q * a.unsqueeze(-1)).reshape(w.shape).to(w.dtype)
+
+
 class TernaryLinear(nn.Module):
     """Linear whose weight is ternarised on the fly (STE); weight is the master."""
 

@@ -26,7 +26,7 @@ import torch.nn.functional as F
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from moe_proxy import ternary_absmean  # noqa: E402
+from moe_proxy import ternary_absmean, ternary_lloyd  # noqa: E402
 
 ART = Path(os.environ.get("MOE_ARTIFACTS", HERE / "artifacts"))
 MODEL = ART / "olmoe-hf"
@@ -34,9 +34,11 @@ OUT = ART / "olmoe"
 CACHE = OUT / "teacher-cache.pt"
 
 
-def ternary_ste(w: torch.Tensor, group: int = 128) -> torch.Tensor:
+def ternary_ste(w: torch.Tensor, group: int = 128, kind: str = "absmean") -> torch.Tensor:
+    """Straight-through ternary with the selected per-group scale rule."""
+    fn = ternary_lloyd if kind == "lloyd" else ternary_absmean
     with torch.no_grad():
-        wq = ternary_absmean(w, group)
+        wq = fn(w, group)
     return wq + (w - w.detach())
 
 

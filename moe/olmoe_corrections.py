@@ -1,7 +1,7 @@
 """TAARDIS-style correction branches for a ternary MoE (OLMoE).
 
 Freeze the RTN-ternary expert banks, add trainable low-rank correction branches
-("Doctors") on each MoE block output plus trainable routers, and train them
+("correction branches") on each MoE block output plus trainable routers, and train them
 jointly end-to-end.  The router corrections are the MoE-specific addition:
 they let routing track the teacher once the hidden states are repaired.
 
@@ -9,10 +9,10 @@ Loss = LM + output KD (top-50 teacher logits) + router KD (teacher top-8).
 
 Usage:
   # training: both cards via device_map auto (teacher + student coexist briefly)
-  HIP_VISIBLE_DEVICES=0,1 python olmoe_doctors.py train \
+  HIP_VISIBLE_DEVICES=0,1 python olmoe_corrections.py train \
       --device-map auto --steps 2000 --rank 64
   # single-card stages (eval, cache): pin the free card, not the display card
-  HIP_VISIBLE_DEVICES=1 python olmoe_doctors.py eval --rank 64 --load <ckpt>
+  HIP_VISIBLE_DEVICES=1 python olmoe_corrections.py eval --rank 64 --load <ckpt>
 """
 
 from __future__ import annotations
@@ -29,23 +29,28 @@ import torch.nn.functional as F
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from moe_proxy import ternary_absmean  # noqa: E402
+from moe_proxy import ternary_absmean, ternary_lloyd  # noqa: E402
 from olmoe_proxy import (CACHE, MODEL, OUT, gate_hook, load_model,  # noqa: E402
                          parse_layers, windows)
 
 
 @torch.no_grad()
-def quantize_bank_inplace(p: torch.Tensor, group: int = 128, chunk: int = 8) -> None:
-    """RTN the frozen expert bank in place, chunked to bound GPU memory."""
+def quantize_bank_inplace(p: torch.Tensor, group: int = 128, chunk: int = 8,
+                          kind: str = "absmean") -> None:
+    """RTN the frozen expert bank in place, chunked to bound GPU memory.
+
+    ``kind="lloyd"`` matches the deployment quantizer (TAARDIS Q1_0_g128).
+    """
+    fn = ternary_lloyd if kind == "lloyd" else ternary_absmean
     for s in range(0, p.shape[0], chunk):
         part = p[s:s + chunk]
-        q = ternary_absmean(part, group)
+        q = fn(part, group)
         part.copy_(q)
         del q
     torch.cuda.empty_cache()
 
 
-class Doctor(nn.Module):
+class CorrectionBranch(nn.Module):
     """Low-rank correction branch, zero-initialised on the output side.
 
     Master weights stay fp32 (adapter-scale updates survive), the matmuls are
@@ -58,11 +63,13 @@ class Doctor(nn.Module):
                     folded from the down factor into the up factor
     """
 
-    def __init__(self, hidden: int, rank: int, quant: str = "fp32"):
+    def __init__(self, hidden: int, rank: int, quant: str = "fp32",
+                 quant_kind: str = "absmean"):
         super().__init__()
         self.down = nn.Linear(hidden, rank, bias=False)
         self.up = nn.Linear(rank, hidden, bias=False)
         self.quant = quant
+        self.quant_kind = quant_kind
         nn.init.normal_(self.down.weight, std=0.02)
         nn.init.zeros_(self.up.weight)
 
@@ -70,10 +77,11 @@ class Doctor(nn.Module):
         wd, wu = self.down.weight, self.up.weight
         if self.quant == "fp32":
             return wd, wu
+        fn = ternary_lloyd if self.quant_kind == "lloyd" else ternary_absmean
         with torch.no_grad():
             if self.quant == "g128":
-                wdq = ternary_absmean(wd, 128)
-                wuq = ternary_absmean(wu, 128)
+                wdq = fn(wd, 128)
+                wuq = fn(wu, 128)
             else:                                    # rank component scales
                 s = wd.abs().mean(dim=1).clamp_min(1e-8)       # [rank]
                 qd = torch.clamp(torch.round(wd / s[:, None]), -1, 1)
@@ -90,14 +98,32 @@ class Doctor(nn.Module):
         return F.linear(h, wu).to(x.dtype)
 
 
-class MoEWithDoctor(nn.Module):
-    def __init__(self, mlp: nn.Module, hidden: int, rank: int, quant: str = "fp32"):
+class MoEWithCorrection(nn.Module):
+    def __init__(self, mlp: nn.Module, hidden: int, rank: int, quant: str = "fp32",
+                 quant_kind: str = "absmean"):
         super().__init__()
         self.mlp = mlp
-        self.doctor = Doctor(hidden, rank, quant)
+        self.branch = CorrectionBranch(hidden, rank, quant, quant_kind)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.mlp(x) + self.doctor(x)
+        return self.mlp(x) + self.branch(x)
+
+
+def moe_block(layer):
+    """Return the MoE block whether or not a branch wrapper is present."""
+    mlp = layer.mlp
+    return mlp.mlp if hasattr(mlp, "branch") else mlp
+
+
+def load_branch_state(model, path):
+    """Load a saved correction-branch state dict, accepting legacy key names.
+
+    Checkpoints written before the naming cleanup store ``.doctor.`` keys;
+    those are remapped to ``.branch.`` on load so old runs stay readable.
+    """
+    sd = torch.load(path, map_location="cpu")
+    sd = {k.replace(".doctor.", ".branch."): v for k, v in sd.items()}
+    return model.load_state_dict(sd, strict=False)
 
 
 def _fp16_layers(args) -> set:
@@ -113,29 +139,35 @@ def build(args):
     for i, layer in enumerate(model.model.layers):
         experts = layer.mlp.experts
         # freeze the body in its deploy format: RTN once, no on-the-fly work
-        quantize_bank_inplace(experts.gate_up_proj, args.group)
-        quantize_bank_inplace(experts.down_proj, args.group)
+        quantize_bank_inplace(experts.gate_up_proj, args.group, kind=args.quant)
+        quantize_bank_inplace(experts.down_proj, args.group, kind=args.quant)
         dev = next(layer.mlp.parameters()).device
         quant = "fp32" if i in fp16 else args.branch_quant
-        layer.mlp = MoEWithDoctor(layer.mlp, hidden, args.rank, quant).to(dev)
+        if getattr(args, "branch_target", "moe_out") == "attn_out":
+            # LoRA-mappable placement: the correction reads the attention
+            # context and writes into the residual stream before the router.
+            layer.self_attn.o_proj = MoEWithCorrection(
+                layer.self_attn.o_proj, hidden, args.rank, quant, args.quant).to(dev)
+        else:
+            layer.mlp = MoEWithCorrection(layer.mlp, hidden, args.rank, quant, args.quant).to(dev)
     if fp16:
         print(f"mixed sidecar: fp16 branches on layers {sorted(fp16)}", flush=True)
     for name, p in model.named_parameters():
-        p.requires_grad_(("doctor." in name) or (".gate." in name))
+        p.requires_grad_(("branch." in name) or (".gate." in name))
     n_tr = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"trainable {n_tr/1e6:.2f}M (doctors + routers)", flush=True)
+    print(f"trainable {n_tr/1e6:.2f}M (branches + routers)", flush=True)
     return model, tok
 
 
 def save(model, args, step):
     sd = {k: v for k, v in model.state_dict().items()
-          if ".doctor." in k or ".gate." in k}
+          if ".branch." in k or ".gate." in k}
     tag = "" if args.branch_quant == "fp32" else f"-{args.branch_quant}"
     fp16 = _fp16_layers(args)
     if fp16:
         tag += "-mixed"
     tag += f"-{args.tag}" if args.tag else ""
-    p = OUT / f"olmoe-doctors-r{args.rank}{tag}-step{step}.pt"
+    p = OUT / f"olmoe-corr-r{args.rank}{tag}-step{step}.pt"
     torch.save(sd, p)
     if args.branch_quant == "fp32":
         b = sum(v.numel() for k, v in sd.items()
@@ -167,7 +199,7 @@ def quick_eval(model, data, args, ref=None):
     for i in range(len(data)):
         ids = data[i:i + 1].to(args.device)
         store = {}
-        hs = [layer.mlp.mlp.gate.register_forward_hook(gate_hook(store, j))
+        hs = [moe_block(layer).gate.register_forward_hook(gate_hook(store, j))
               for j, layer in enumerate(model.model.layers)]
         logits = model(ids).logits
         for h in hs:
@@ -220,7 +252,7 @@ def train(args):
         for rec in cache:
             ids = data[step % len(data):step % len(data) + 1].to(args.device)
             store = {}
-            hs = [layer.mlp.mlp.gate.register_forward_hook(gate_hook(store, j))
+            hs = [moe_block(layer).gate.register_forward_hook(gate_hook(store, j))
                   for j, layer in enumerate(model.model.layers)]
             logits = model(ids).logits
             for h in hs:
@@ -307,7 +339,7 @@ def evaluate(args):
         for i in range(len(data)):
             ids = data[i:i + 1].to(args.device)
             store = {}
-            hs = [layer.mlp.mlp.gate.register_forward_hook(gate_hook(store, j))
+            hs = [moe_block(layer).gate.register_forward_hook(gate_hook(store, j))
                   for j, layer in enumerate(model.model.layers)]
             logits = model(ids).logits
             for h in hs:
@@ -323,12 +355,11 @@ def evaluate(args):
         print(f"{tag}: ppl {ppl:.4f} router_agree {sum(agree)/len(agree):.4f}", flush=True)
         return {"ppl": round(ppl, 4), "router_agree": round(sum(agree) / len(agree), 4)}
 
-    res = {"rtn_no_doctors": run("rtn_no_doctors")}
+    res = {"rtn_no_branches": run("rtn_no_branches")}
     if args.load:
-        sd = torch.load(args.load, map_location="cpu")
-        model.load_state_dict(sd, strict=False)
-        res["trained_doctors"] = run("trained_doctors")
-    (OUT / "doctors-eval.json").write_text(json.dumps(res, indent=2))
+        load_branch_state(model, args.load)
+        res["trained_branches"] = run("trained_branches")
+    (OUT / "branches-eval.json").write_text(json.dumps(res, indent=2))
     print(json.dumps(res, indent=2))
 
 
@@ -344,11 +375,16 @@ def main():
     ap.add_argument("--seq", type=int, default=512)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--group", type=int, default=128)
+    ap.add_argument("--quant", choices=["absmean", "lloyd"], default="absmean",
+                    help="per-group scale rule for the frozen body and branches; "
+                         "'lloyd' matches the deployable Q1_0_g128 quantizer")
     ap.add_argument("--rank", type=int, default=64)
     ap.add_argument("--branch-quant", choices=["fp32", "g128", "rank"], default="fp32",
                     help="deployed branch format; STE-trained when != fp32")
     ap.add_argument("--branch-quant-fp16-layers", default="",
                     help="comma-separated layer indices kept fp32 in a mixed sidecar")
+    ap.add_argument("--branch-target", choices=["moe_out", "attn_out"], default="moe_out",
+                    help="where the correction reads/writes; attn_out is LoRA-mappable")
     ap.add_argument("--tag", default="", help="optional run tag for checkpoint names")
     ap.add_argument("--lr-half-every", type=int, default=0,
                     help="halve the LR every N steps (0=off)")

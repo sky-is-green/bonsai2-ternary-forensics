@@ -30,7 +30,7 @@ harness:
 - **Harness smoke passed:** `qwen35_moe_proxy.py smoke` on embedding + layers
   0-3 (partial checkpoint) runs the fused-bank STE patch end to end: hidden
   drift 0.307 and router top-8 agreement 0.825 against the FP pass (in the E1
-  probe's range), 10.49M doctor+router parameters trainable, and the LM loss
+  probe's range), 10.49M correction-branch + router parameters trainable, and the LM loss
   falls 8.74 -> 5.38 over 10 steps.
 - **Role map:** `role_map.py` projects the ternary build at **8.82 GiB /
   2.186 bpw** (per-tensor roles in `results/role-map-*.json`; router and the

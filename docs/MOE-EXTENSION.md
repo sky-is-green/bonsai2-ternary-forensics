@@ -272,7 +272,7 @@ moe/
   olmoe_proxy.py        in-place ternary QAT on OLMoE (negative control)
   moe_proxy.py          MoTE-style up-cycle proxy (Qwen3-1.7B)
   olmoe_rotate_rtn.py   rotation-vs-RTN quantizer comparison
-  olmoe_doctors.py      per-layer residual-stream corrections (route A)
+  olmoe_corrections.py      per-layer residual-stream corrections (route A)
   olmoe_experts.py      per-expert corrections (placement control)
   eval_ckpts.py         checkpoint trajectory + router diagnostics
   save_ternary_olmoe.py materialise a ternary build to an HF dir

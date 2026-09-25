@@ -1,6 +1,6 @@
 """Qwen3.5-MoE (35B-A3B) ternary proxy: fused expert banks + correction branches.
 
-Port of ``olmoe_proxy.py`` / ``olmoe_doctors.py`` to the ``qwen3_5_moe``
+Port of ``olmoe_proxy.py`` / ``olmoe_corrections.py`` to the ``qwen3_5_moe``
 architecture:
 
   - experts are fused parameters (``experts.gate_up_proj`` /
@@ -39,7 +39,8 @@ import torch.nn.functional as F
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from moe_proxy import ternary_absmean  # noqa: E402
-from olmoe_doctors import Doctor, MoEWithDoctor, quantize_bank_inplace  # noqa: E402
+from olmoe_corrections import (CorrectionBranch, MoEWithCorrection,  # noqa: E402
+                               load_branch_state, quantize_bank_inplace)
 from olmoe_proxy import gate_hook, ternary_ste, windows  # noqa: E402
 
 ART = Path(os.environ.get("MOE_ARTIFACTS", HERE / "artifacts"))
@@ -221,11 +222,11 @@ def smoke(args):
     # correction branches on each MoE block output + trainable routers
     hidden = model.config.hidden_size
     for layer in model.layers:
-        layer.mlp = MoEWithDoctor(layer.mlp, hidden, args.rank, args.branch_quant).to(args.device)
+        layer.mlp = MoEWithCorrection(layer.mlp, hidden, args.rank, args.branch_quant).to(args.device)
     for name, p in model.named_parameters():
-        p.requires_grad_((".doctor." in name) or ("mlp.gate." in name))
+        p.requires_grad_((".branch." in name) or ("mlp.gate." in name))
     n_tr = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"trainable {n_tr/1e6:.2f}M (doctors + routers)", flush=True)
+    print(f"trainable {n_tr/1e6:.2f}M (branches + routers)", flush=True)
 
     params = [p for p in model.parameters() if p.requires_grad]
     opt = torch.optim.Adafactor(params, lr=args.lr, weight_decay=0.0)
@@ -296,11 +297,11 @@ def stage_train(args):
     hidden = getattr(model.config, "hidden_size", None) or model.config.text_config.hidden_size
     for layer in layers:
         dev = next(layer.mlp.parameters()).device
-        layer.mlp = MoEWithDoctor(layer.mlp, hidden, args.rank, args.branch_quant).to(dev)
+        layer.mlp = MoEWithCorrection(layer.mlp, hidden, args.rank, args.branch_quant).to(dev)
     for name, p in model.named_parameters():
-        p.requires_grad_((".doctor." in name) or (".mlp.gate." in name))
+        p.requires_grad_((".branch." in name) or (".mlp.gate." in name))
     n_tr = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"trainable {n_tr/1e6:.2f}M (doctors + routers)", flush=True)
+    print(f"trainable {n_tr/1e6:.2f}M (branches + routers)", flush=True)
 
     cache = torch.load(CACHE, map_location="cpu")
     data = windows(tok, args.windows, args.seq, args.seed)
@@ -339,9 +340,9 @@ def stage_train(args):
 
 def save(model, args, step):
     sd = {k: v for k, v in model.state_dict().items()
-          if ".doctor." in k or ".mlp.gate." in k}
+          if ".branch." in k or ".mlp.gate." in k}
     tag = "" if args.branch_quant == "fp32" else f"-{args.branch_quant}"
-    p = OUT / f"qwen35-doctors-r{args.rank}{tag}-step{step}.pt"
+    p = OUT / f"qwen35-corr-r{args.rank}{tag}-step{step}.pt"
     torch.save(sd, p)
     print(f"saved {p}", flush=True)
 
@@ -365,10 +366,9 @@ def stage_eval(args):
     hidden = getattr(model.config, "hidden_size", None) or model.config.text_config.hidden_size
     for layer in layers:
         dev = next(layer.mlp.parameters()).device
-        layer.mlp = MoEWithDoctor(layer.mlp, hidden, args.rank, args.branch_quant).to(dev)
+        layer.mlp = MoEWithCorrection(layer.mlp, hidden, args.rank, args.branch_quant).to(dev)
     if args.load:
-        sd = torch.load(args.load, map_location="cpu")
-        missing, unexpected = model.load_state_dict(sd, strict=False)
+        missing, unexpected = load_branch_state(model, args.load)
         print(f"loaded {args.load}: missing={len(missing)} unexpected={len(unexpected)}",
               flush=True)
     model.eval()

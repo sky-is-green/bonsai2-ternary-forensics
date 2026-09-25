@@ -14,7 +14,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from olmoe_doctors import quantize_bank_inplace  # noqa: E402
+from olmoe_corrections import quantize_bank_inplace  # noqa: E402
 from olmoe_proxy import load_model  # noqa: E402
 
 ART = Path(os.environ.get("MOE_ARTIFACTS", HERE / "artifacts"))

@@ -28,7 +28,7 @@ import torch.nn.functional as F
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from olmoe_doctors import quantize_bank_inplace  # noqa: E402
+from olmoe_corrections import quantize_bank_inplace  # noqa: E402
 from olmoe_proxy import CACHE, MODEL, OUT, gate_hook, load_model, windows  # noqa: E402
 
 

@@ -29,3 +29,16 @@ Third-party components and attributions:
 4. Prism ML llama.cpp fork (runtime used for evaluation)
    MIT License. https://github.com/PrismML-Eng/llama.cpp
    Based on ggml / llama.cpp, Copyright 2023-2026 The ggml authors, MIT License.
+
+5. TAARDIS llama.cpp fork (runtime and ternary container format)
+   MIT License. https://github.com/CodeMasterCody3D/taardis-llama.cpp
+   Based on ggml / llama.cpp, Copyright 2023-2026 The ggml authors, MIT License.
+   The published MoE artefacts use this fork's Q1_0_g128 ternary type and its
+   adapter (LoRA) conventions.  The function `ternary_lloyd` in
+   moe/moe_proxy.py is an independent torch reimplementation of that fork's
+   Lloyd-Max scale refinement for the same container; it is not a code copy.
+
+6. TAARDIS-27B (pipeline and correction-adapter reference)
+   Copyright Cody Dixon.  Released under the Apache License, Version 2.0.
+   https://huggingface.co/CodeMasterCody3D/taardis-27b-full-ternary
+   Referenced for the correction-branch format; no weights are redistributed.

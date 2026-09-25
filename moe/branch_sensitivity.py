@@ -8,7 +8,7 @@ sidecar should keep at fp16.
 
 Usage:
   MOE_ARTIFACTS=... HIP_VISIBLE_DEVICES=1 python branch_sensitivity.py \
-      --rank 512 --load $MOE_ARTIFACTS/olmoe/olmoe-doctors-r512-d4096-step4096.pt \
+      --rank 512 --load $MOE_ARTIFACTS/olmoe/olmoe-corr-r512-d4096-step4096.pt \
       --out $MOE_ARTIFACTS/olmoe/branch-sensitivity-r512-d4096.json
 """
 
@@ -26,7 +26,7 @@ import torch.nn.functional as F
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from olmoe_doctors import build  # noqa: E402
+from olmoe_corrections import build, load_branch_state  # noqa: E402
 from olmoe_proxy import MODEL, windows  # noqa: E402
 
 
@@ -60,23 +60,23 @@ def main():
     data = windows(tok, args.windows, args.seq, 999, "wikitext")
 
     ns = SimpleNamespace(device_map=args.device, group=args.group, rank=args.rank,
-                         branch_quant="fp32", branch_quant_fp16_layers="")
+                         branch_quant="fp32", branch_quant_fp16_layers="",
+                         quant="absmean")
     model, _ = build(ns)
-    missing, unexpected = model.load_state_dict(
-        torch.load(args.load, map_location="cpu"), strict=False)
+    missing, unexpected = load_branch_state(model, args.load)
     print(f"loaded {args.load}: missing={len(missing)} unexpected={len(unexpected)}",
           flush=True)
     model.eval()
-    doctors = [layer.mlp.doctor for layer in model.model.layers]
+    branches = [layer.mlp.branch for layer in model.model.layers]
     base = eval_ppl(model, data, args.device)
     print(f"baseline fp32: ppl {base:.4f}", flush=True)
 
     rows = []
-    todo = range(len(doctors)) if args.layer < 0 else [args.layer]
+    todo = range(len(branches)) if args.layer < 0 else [args.layer]
     for i in todo:
-        doctors[i].quant = "g128"
+        branches[i].quant = "g128"
         ppl = eval_ppl(model, data, args.device)
-        doctors[i].quant = "fp32"
+        branches[i].quant = "fp32"
         rows.append({"layer": i, "ppl_g128": round(ppl, 4),
                      "delta": round(ppl - base, 4), "ratio": round(ppl / base, 4)})
         print(f"layer {i:2d}: ppl {ppl:9.2f}  x{ppl/base:.3f}  (+{ppl-base:.2f})",
