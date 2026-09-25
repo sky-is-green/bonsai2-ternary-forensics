@@ -18,7 +18,7 @@ harness:
 | routed experts | fused parameters `experts.gate_up_proj` [256, 1024, 2048] and `experts.down_proj` [256, 512, 2048] |
 | precision-exempt | router `mlp.gate`, `shared_expert_gate`, GDN `in_proj_a`/`in_proj_b`, norms |
 
-## Validated so far (local, config-only)
+## Validated so far (local)
 
 - **Target profile:** `bonsai_forensics.targets` now has a `qwen3_5_moe`
   profile; `scripts/pilot/inspect_model_targets.py` (meta device, no weights)
@@ -27,6 +27,11 @@ harness:
   The 100 unselected language-tower linears are exactly the intended FP set
   (30+30 GDN `in_proj_a/b`, 40 `shared_expert_gate`); the router is not an
   `nn.Linear` and the visual tower / MTP head are excluded by name.
+- **Harness smoke passed:** `qwen35_moe_proxy.py smoke` on embedding + layers
+  0-3 (partial checkpoint) runs the fused-bank STE patch end to end: hidden
+  drift 0.307 and router top-8 agreement 0.825 against the FP pass (in the E1
+  probe's range), 10.49M doctor+router parameters trainable, and the LM loss
+  falls 8.74 -> 5.38 over 10 steps.
 - **Role map:** `role_map.py` projects the ternary build at **8.82 GiB /
   2.186 bpw** (per-tensor roles in `results/role-map-*.json`; router and the
   absorb-exempt shared expert stay FP16).
@@ -37,6 +42,9 @@ harness:
 ## What the port needs
 
 1. **Harness variant** (`qwen35_moe_proxy.py`, adapted from `olmoe_proxy.py`):
+   implemented and smoke-tested locally (see above).  The full-model
+   `cache`/`train`/`eval` stages are written but only executable once the
+   complete checkpoint can be resident:
    - patch `Qwen3_5MoeExperts.forward` to ternarise the fused banks (STE) and
      rebind instance forwards (`device_map="auto"` shadowing trap);
    - hook the router (`layer.mlp.gate`) for the cache and the agreement metric;
@@ -58,13 +66,13 @@ harness:
 
 ## Smoke-test plan (before renting)
 
-- `scripts/pilot/inspect_model_targets.py` on the real config (already green).
-- On the local partial checkpoint (embedding + first layers): run the patched
-  ternary forward against the FP forward, check the hidden drift matches the
-  probe, and run a few KD steps on CPU or one GPU to confirm the cache aligns
-  with the student inputs (same windows/seed).
+- `scripts/pilot/inspect_model_targets.py` on the real config — **green**.
+- Prefix smoke of the patched forward + correction steps — **green** (drift
+  0.307, agreement 0.825, loss 8.74 -> 5.38).
 - Materialise the prefix's expert banks to a ternary HF dir and scan with
-  AUTOGRID; expect the routed banks to classify ternary, as OLMoE did.
+  AUTOGRID — next; needs a short single-card run.
+- Full-model `cache`/`train`/`eval` dry run stays for the rented card (the
+  full 35B does not fit here).
 
 ## Open decisions
 

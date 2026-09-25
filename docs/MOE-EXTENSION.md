@@ -172,11 +172,19 @@ the g128 sidecar reaches 76.75 at 4,096 steps (1.56x) and then plateaus at
 ternary constraint is a representational tax at that operating point, not an
 optimisation shortfall.  (The fp32 recipe has since improved to 37.11 on
 8,192 windows, §2.4a; the sidecar at that newest operating point is not yet
-measured — a mixed-precision sidecar is the next test.  Repeats of the
-4,096-step point differ by ~3%, so the ratio is ~1.5x rather than an exact
-figure.)  Either way the sidecar is ~9 MB, under 0.5% of a ternary artifact, so
-the ~2 bpw total claim holds; g128 is the better size/fidelity trade at equal
-training.
+measured.  Repeats of the 4,096-step point differ by ~3%, so the ratio is
+~1.5x rather than an exact figure.)  Either way the sidecar is ~9 MB, under
+0.5% of a ternary artifact, so the ~2 bpw total claim holds; g128 is the
+better size/fidelity trade at equal training.
+
+**The tax is edge-dominated, and reducible.**  A post-hoc scan of the
+8,192-window model ternarises one layer's branch at a time: layers 0 and 15
+cost ~3.3 PPL each, layer 13 only +0.09, the rest +0.1 to +2.8.  Single-layer
+costs are not additive (all-ternary post-hoc is catastrophic), so the test is a
+retrain: keeping layers 0 and 15 fp16 and the rest g128 reaches **67.43 (1.37x
+over fp32) at 24.6 MB / 5.86 bpw**, against 73.67 (1.50x) at 8.9 MB all-ternary
+and 49.27 at 134 MB fp32.  A four-layer fp16 variant is in flight.  The trade
+is cheap because even the mixed sidecar is ~0.3% of a ternary 35B artifact.
 
 ### 2.5 Where the cheap route already works
 
@@ -228,9 +236,10 @@ Route A is the one this work opens: it reaches ternary bit budgets without the
    `--router-weight 0` control matched within ~1.5%), so the correction repairs
    the state the router reads rather than distilling its decisions,
 3. ternarising the correction sidecar: STE-trained ternary branches cost
-   1.2-1.5x PPL over fp32 depending on operating point (1.50x converged at
-   the 4,096-window point) and ship at ~9 MB (2.0-2.1 bpw); the size target is
-   met,
+   1.2-1.5x PPL over fp32 depending on operating point (1.50x converged at the
+   4,096-window point) and ship at ~9 MB (2.0-2.1 bpw); a mixed sidecar with
+   layers 0 and 15 at fp16 costs 1.37x at 24.6 MB, and wider mixes are in
+   flight; the size target is met,
 4. serving: a grouped ternary GEMM does not exist; the dense path (Prism fork,
    TAARDIS fork) has no MoE kernels,
 5. the iso-compute ladder for capacity-vs-compute separation (0.6B 51.9% and

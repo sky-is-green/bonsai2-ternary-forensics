@@ -100,17 +100,26 @@ class MoEWithDoctor(nn.Module):
         return self.mlp(x) + self.doctor(x)
 
 
+def _fp16_layers(args) -> set:
+    return {int(x) for x in str(getattr(args, "branch_quant_fp16_layers", "")).split(",")
+            if x.strip()}
+
+
 def build(args):
     mm = {0: "14GiB", 1: "19GiB"} if args.device_map == "auto" else None
     model, tok = load_model(args.device_map, mm)
     hidden = model.config.hidden_size
+    fp16 = _fp16_layers(args)
     for i, layer in enumerate(model.model.layers):
         experts = layer.mlp.experts
         # freeze the body in its deploy format: RTN once, no on-the-fly work
         quantize_bank_inplace(experts.gate_up_proj, args.group)
         quantize_bank_inplace(experts.down_proj, args.group)
         dev = next(layer.mlp.parameters()).device
-        layer.mlp = MoEWithDoctor(layer.mlp, hidden, args.rank, args.branch_quant).to(dev)
+        quant = "fp32" if i in fp16 else args.branch_quant
+        layer.mlp = MoEWithDoctor(layer.mlp, hidden, args.rank, quant).to(dev)
+    if fp16:
+        print(f"mixed sidecar: fp16 branches on layers {sorted(fp16)}", flush=True)
     for name, p in model.named_parameters():
         p.requires_grad_(("doctor." in name) or (".gate." in name))
     n_tr = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -122,19 +131,30 @@ def save(model, args, step):
     sd = {k: v for k, v in model.state_dict().items()
           if ".doctor." in k or ".gate." in k}
     tag = "" if args.branch_quant == "fp32" else f"-{args.branch_quant}"
+    fp16 = _fp16_layers(args)
+    if fp16:
+        tag += "-mixed"
     tag += f"-{args.tag}" if args.tag else ""
     p = OUT / f"olmoe-doctors-r{args.rank}{tag}-step{step}.pt"
     torch.save(sd, p)
-    n_br = sum(v.numel() for k, v in sd.items()
-               if k.endswith("down.weight") or k.endswith("up.weight"))
     if args.branch_quant == "fp32":
-        b = n_br * 4
+        b = sum(v.numel() for k, v in sd.items()
+                if k.endswith("down.weight") or k.endswith("up.weight")) * 4
+        n_br = b / 4
     else:
-        b = n_br / 4                                   # 2-bit packed ternary codes
+        n_br = n_fp = 0
+        for k, v in sd.items():
+            if not (k.endswith("down.weight") or k.endswith("up.weight")):
+                continue
+            li = int(k.split("layers.")[1].split(".")[0]) if ".layers." in k else -1
+            n_br += v.numel()
+            n_fp += v.numel() if li in fp16 else 0
+        n_tern = n_br - n_fp
+        b = n_fp * 4 + n_tern / 4                        # 2-bit packed ternary codes
         if args.branch_quant == "g128":
-            b += n_br / 128 * 2                        # fp16 scale per 128 group
+            b += n_tern / 128 * 2                        # fp16 scale per 128 group
         else:
-            b += args.rank * 2 * len(model.model.layers)  # one folded fp16 scale per rank
+            b += args.rank * 2 * (len(model.model.layers) - len(fp16))
     print(f"saved {p} [deployed branches {b/1e6:.1f} MB, {b*8/n_br:.3f} bpw]",
           flush=True)
 
@@ -327,6 +347,8 @@ def main():
     ap.add_argument("--rank", type=int, default=64)
     ap.add_argument("--branch-quant", choices=["fp32", "g128", "rank"], default="fp32",
                     help="deployed branch format; STE-trained when != fp32")
+    ap.add_argument("--branch-quant-fp16-layers", default="",
+                    help="comma-separated layer indices kept fp32 in a mixed sidecar")
     ap.add_argument("--tag", default="", help="optional run tag for checkpoint names")
     ap.add_argument("--lr-half-every", type=int, default=0,
                     help="halve the LR every N steps (0=off)")

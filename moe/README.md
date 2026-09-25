@@ -21,10 +21,12 @@ Two targets:
 | `olmoe_proxy.py` | in-place ternary QAT + teacher cache + KD loop + eval |
 | `moe_proxy.py` | MoTE-style up-cycle proxy (Qwen3-1.7B) |
 | `olmoe_rotate_rtn.py` | rotation vs RTN quantizer comparison |
-| `olmoe_doctors.py` | per-layer residual-stream correction branches (route A) |
+| `olmoe_doctors.py` | per-layer residual-stream correction branches (route A); STE branch formats and mixed-precision sidecars |
 | `olmoe_experts.py` | per-expert correction branches (placement control) |
 | `eval_ckpts.py` | checkpoint trajectory + router diagnostics |
 | `save_ternary_olmoe.py` | materialise a ternary build to an HF dir |
+| `qwen35_moe_proxy.py` | 35B-A3B (`qwen3_5_moe`) port: fused-bank STE patch, prefix smoke, cache/train/eval stages |
+| `branch_sensitivity.py` | per-layer sidecar sensitivity scan (which layers a mixed sidecar should keep fp16) |
 
 `results/` holds the JSON evidence quoted in the write-up: per-run 8-window
 evals, the E1 routing probe, the rotation comparison, the AUTOGRID scans, and
