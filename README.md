@@ -13,7 +13,9 @@ localized the quality gap to trained weights, and showed that a widely cited
 public PTQ baseline is a calibration-passage artifact.
 
 This is a study. It is not affiliated with Prism ML, Alibaba Cloud, or
-ThakiCloud, and it redistributes no model weights.
+ThakiCloud, and it redistributes no model weights. The public write-up and
+discussion thread: [Prism model page, discussion
+#62](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/discussions/62).
 
 ## Findings at a glance
 
