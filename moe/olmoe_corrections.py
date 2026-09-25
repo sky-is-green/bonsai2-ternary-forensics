@@ -333,6 +333,8 @@ def evaluate(args):
 
     model, _ = build(args)
     model.eval()
+    base_gates = {k: p.detach().clone() for k, p in model.named_parameters()
+                  if ".gate." in k}
 
     def run(tag):
         total, ntok, agree = 0.0, 0, []
@@ -358,6 +360,13 @@ def evaluate(args):
     res = {"rtn_no_branches": run("rtn_no_branches")}
     if args.load:
         load_branch_state(model, args.load)
+        if getattr(args, "eval_router", "trained") == "base":
+            # ablation: keep the branches but restore the frozen-body routers,
+            # i.e. what a branches-only LoRA adapter would compute
+            with torch.no_grad():
+                for k, p in model.named_parameters():
+                    if k in base_gates:
+                        p.copy_(base_gates[k])
         res["trained_branches"] = run("trained_branches")
     (OUT / "branches-eval.json").write_text(json.dumps(res, indent=2))
     print(json.dumps(res, indent=2))
@@ -399,6 +408,9 @@ def main():
     ap.add_argument("--log-every", type=int, default=25)
     ap.add_argument("--ckpt-every", type=int, default=500)
     ap.add_argument("--eval-every", type=int, default=500)
+    ap.add_argument("--eval-router", choices=["trained", "base"], default="trained",
+                    help="'base' keeps branch-only corrections (what a LoRA adapter ships) "
+                         "while evaluating")
     ap.add_argument("--load", default="")
     args = ap.parse_args()
     if args.stage == "train":

@@ -79,8 +79,11 @@ HIP_VISIBLE_DEVICES=1 python olmoe_corrections.py eval --rank 512 \
     --load $MOE_ARTIFACTS/olmoe/olmoe-corr-r512-g128-step8192.pt
 
 # 4. pack the branches as a standard llama.cpp LoRA adapter
+#    (defaults ternarise the factors with the deployed lloyd/g128 rule, so the
+#    adapter matches the eval; add --routers --base-model <olmoe-hf> to also
+#    ship the trained routers as exact rank-64 ffn_gate_inp LoRA pairs)
 PYTHONPATH=<llama.cpp fork>/gguf-py python export_branches_lora.py \
-    --load $MOE_ARTIFACTS/olmoe/olmoe-corr-r512-g128-step8192.pt \
+    --load $MOE_ARTIFACTS/olmoe/olmoe-corr-r512-g128-attnoutlloyd-step8000.pt \
     --arch olmoe --target attn_out --out branches.lora.gguf
 
 # placement control: corrections inside the experts instead of the stream
