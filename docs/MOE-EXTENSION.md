@@ -115,6 +115,31 @@ The k=2 row states the same boundary this document reaches from the other
 side: at ternary budgets nothing converts for free, and the STEER set is
 exactly what the correction pipeline has to carry.
 
+### 2.4c The sidecar at 2 bits
+
+The design rule puts the corrections on the residual stream; the remaining
+artifact question is whether they can be stored at ternary-class bit widths.
+TAARDIS V3 ships its branches ternarised per rank component at ~2 bits per
+factor.  Both that per-rank format and our g128 expert format were trained with
+straight-through estimation on the rank-512 recipe (2048 steps, evaluated at
+the 2000-step point with the 8-window protocol):
+
+| branch format | PPL | router agreement | deployed size (35.7M branches) |
+|---|---|---|---|
+| fp32 (reference) | 71.14 | 0.710 | 134 MB |
+| g128 ternary, post-hoc | 1,014.34 | 0.560 | 8.9 MB (2.125 bpw) |
+| per-rank ternary, post-hoc | 1,759.11 | 0.528 | 8.4 MB (2.004 bpw) |
+| **g128 ternary, STE-trained** | **93.47** | **0.651** | **8.9 MB (2.125 bpw)** |
+| per-rank ternary, STE-trained | 107.18 | 0.626 | 8.4 MB (2.004 bpw) |
+
+Post-hoc ternarisation alone is not viable (14-25x PPL).  Training in the
+deployed format recovers most of it: the g128 sidecar costs 1.31x over the fp32
+reference (93.47 vs 71.14 at the same 2000-step point) and the per-rank format
+1.51x; both are still descending at 2048 steps, so longer training should close
+more.  The sidecar is ~9 MB either way, under 0.5% of a ternary artifact, so the
+~2 bpw total claim survives; g128 is the better size/fidelity trade at equal
+training.
+
 ### 2.5 Where the cheap route already works
 
 MoTE-style up-cycling (pretrained FFN kept as a frozen BF16 shared expert,
@@ -150,7 +175,7 @@ fairness rules.
 
 | route | mechanism | cost | status |
 |---|---|---|---|
-| A | in-place ternary + trained residual-stream corrections | single 80 GB card or 2x40 GB for the correction run; no 263 GB fp32-master QAT | placement rule established; rank scaling flat (best 71.14 at rank 512); loss/checkpoint selection is the open axis |
+| A | in-place ternary + trained residual-stream corrections | single 80 GB card or 2x40 GB for the correction run; no 263 GB fp32-master QAT | placement rule established; rank scaling flat (best 71.14 at rank 512); ternary sidecar at ~2.1 bpw costs 1.31x (STE) |
 | B | MoTE-style re-architecture (frozen FP component carries the function) | cheap training, larger artifact | demonstrated at 1.5B/3B |
 | C | MoE-aware mixed-precision PTQ (APEX-style) | cheapest, ~2.8 bpw | published, Bonsai-class retention |
 
@@ -163,8 +188,9 @@ Route A is the one this work opens: it reaches ternary bit budgets without the
    selection rather than more capacity),
 2. router-aware losses: the router KD term did not improve agreement at the
    budgets tried, so the correction has to repair the state the router reads,
-3. ternarising the correction sidecar (TAARDIS ships branches at 2 bits per
-   factor) so the artifact stays near 2 bpw,
+3. ternarising the correction sidecar: STE-trained ternary branches cost 1.31x
+   PPL (g128) or 1.51x (per-rank) over fp32 at equal steps, and ship at ~9 MB
+   (2.0-2.1 bpw); the size target is met,
 4. serving: a grouped ternary GEMM does not exist; the dense path (Prism fork,
    TAARDIS fork) has no MoE kernels,
 5. the iso-compute ladder for capacity-vs-compute separation (0.6B 51.9% and
