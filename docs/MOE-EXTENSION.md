@@ -161,11 +161,13 @@ operating point, at matched steps:
 Post-hoc ternarisation alone is not viable (14-25x PPL).  Training in the
 deployed format recovers most of it: the g128 sidecar costs 1.31x over the fp32
 reference (93.47 vs 71.14 at the same 2000-step point) and the per-rank format
-1.51x.  The cost is not a constant: with the stronger schedule and data of
-§2.4a, the g128 sidecar reaches 76.75 on the 4,096-window recipe against fp32
-49.27 — 1.56x, and still descending at 4,096 steps, so that figure is an upper
-bound.  The ternary constraint bites harder as the base correction gets
-better.  Either way the sidecar is ~9 MB, under 0.5% of a ternary artifact, so
+1.51x.  The cost is not a constant: on the stronger schedule and data of §2.4a
+the g128 sidecar reaches 76.75 at 4,096 steps (1.56x) and then plateaus at
+**73.67 by step 8,000 — 1.50x converged**, 545x recovery from the in-place
+collapse.  The plateau says the ternary constraint is a representational tax at
+this operating point, not an optimisation shortfall.  (Repeats of the
+4,096-step point differ by ~3%, so the ratio is ~1.5x rather than an exact
+figure.)  Either way the sidecar is ~9 MB, under 0.5% of a ternary artifact, so
 the ~2 bpw total claim holds; g128 is the better size/fidelity trade at equal
 training.
 
@@ -204,7 +206,7 @@ fairness rules.
 
 | route | mechanism | cost | status |
 |---|---|---|---|
-| A | in-place ternary + trained residual-stream corrections | single 80 GB card or 2x40 GB for the correction run; no 263 GB fp32-master QAT | placement rule established; rank scaling flat; best 49.27 (814x) with 4,096-window data + LR decay; ternary sidecar at ~2.1 bpw costs 1.2-1.6x (STE, still descending) |
+| A | in-place ternary + trained residual-stream corrections | single 80 GB card or 2x40 GB for the correction run; no 263 GB fp32-master QAT | placement rule established; rank scaling flat; best 49.27 (814x) with 4,096-window data + LR decay; ternary sidecar at ~2.1 bpw costs 1.2-1.5x (1.50x converged) |
 | B | MoTE-style re-architecture (frozen FP component carries the function) | cheap training, larger artifact | demonstrated at 1.5B/3B |
 | C | MoE-aware mixed-precision PTQ (APEX-style) | cheapest, ~2.8 bpw | published, Bonsai-class retention |
 
@@ -218,8 +220,9 @@ Route A is the one this work opens: it reaches ternary bit budgets without the
    `--router-weight 0` control matched within ~1.5%), so the correction repairs
    the state the router reads rather than distilling its decisions,
 3. ternarising the correction sidecar: STE-trained ternary branches cost
-   1.2-1.6x PPL over fp32 depending on operating point (still descending at
-   the stronger one) and ship at ~9 MB (2.0-2.1 bpw); the size target is met,
+   1.2-1.5x PPL over fp32 depending on operating point (1.50x converged at
+   the 4,096-window point) and ship at ~9 MB (2.0-2.1 bpw); the size target is
+   met,
 4. serving: a grouped ternary GEMM does not exist; the dense path (Prism fork,
    TAARDIS fork) has no MoE kernels,
 5. the iso-compute ladder for capacity-vs-compute separation (0.6B 51.9% and
