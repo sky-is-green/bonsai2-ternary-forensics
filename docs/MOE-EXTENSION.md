@@ -70,7 +70,8 @@ loss (LM + output KD + router KD), same 1024 steps unless noted:
 |---|---|---|---|
 | RTN, no corrections | - | 40,121 | 0.463 |
 | per-layer branches (residual stream), rank 64 | 6.29M | 253.85 | 0.506 |
-| **per-layer branches, rank 256, 2048 steps** | **18.9M** | **85.50** | **0.674** |
+| per-layer branches, rank 256, 2048 steps | 18.9M | 85.50 | 0.674 |
+| **per-layer branches, rank 512, 4096 steps** | **35.7M** | **71.14** (best, step 2000; 75.64 at 4096) | **0.710** (0.726 at 4096) |
 | per-expert branches (inside experts), rank 8 | 52.4M | 6,551.74 | 0.425 |
 
 Trainable counts include the trainable routers (2.1M of the totals).  The
@@ -84,12 +85,15 @@ entering the MoE block, so a correction there can steer the next layer's
 decisions; a correction inside an expert acts after the decision and cannot
 influence it.
 
-**Capacity in the right place keeps helping.**  Rank 64 -> 256 with 2x the
-steps took PPL from 253.85 to 85.50 and routing agreement from 0.506 to 0.674,
-still descending at 2048 steps.  Total recovery from the in-place collapse is
-now 469x, using 18.9M trainable parameters (16.8M branches plus routers)
-against a 6.4B frozen body; the teacher is 11.02 / 1.000, so the remaining gap
-is 7.8x.
+**Capacity in the right place keeps helping, with sharply diminishing
+returns.**  Rank 64 -> 256 took PPL from 253.85 to 85.50 and routing agreement
+from 0.506 to 0.674; rank 512 improves the best 8-window PPL again, to 71.14
+(564x recovery from the in-place collapse), on 35.7M trainable parameters
+(33.6M branches plus routers) against a 6.4B frozen body.  But the rank-512
+run turns over: PPL is 71.14 at step 2000 and 75.64 at step 4096, while router
+agreement keeps climbing (0.710 -> 0.726).  More capacity buys a lower floor;
+the last stretch is not a capacity problem.  At the rank-512 best the teacher
+gap is 6.5x (11.02 vs 71.14), and the best checkpoint is not the last one.
 
 **Design rule: for the routing bottleneck, corrections must live on the
 residual stream, not inside the experts.**  TAARDIS's per-matmul placement was
@@ -146,16 +150,17 @@ fairness rules.
 
 | route | mechanism | cost | status |
 |---|---|---|---|
-| A | in-place ternary + trained residual-stream corrections | single 80 GB card or 2x40 GB for the correction run; no 263 GB fp32-master QAT | placement rule established; capacity/rank scaling in progress |
+| A | in-place ternary + trained residual-stream corrections | single 80 GB card or 2x40 GB for the correction run; no 263 GB fp32-master QAT | placement rule established; rank scaling flat (best 71.14 at rank 512); loss/checkpoint selection is the open axis |
 | B | MoTE-style re-architecture (frozen FP component carries the function) | cheap training, larger artifact | demonstrated at 1.5B/3B |
 | C | MoE-aware mixed-precision PTQ (APEX-style) | cheapest, ~2.8 bpw | published, Bonsai-class retention |
 
 Route A is the one this work opens: it reaches ternary bit budgets without the
 4xH100 QAT bill, because only the corrections train.  Open items:
 
-1. correction capacity and rank allocation on the residual stream (rank 256
-   reaches 85.50 at 2048 steps; the rank-512 / 4096-step rung is next; rank was
-   the axis that failed inside the experts),
+1. correction capacity and rank allocation on the residual stream (rank 512
+   reaches a best 8-window PPL of 71.14 at step 2000, then turns over; the
+   rank/step curve has flattened, so the next question is loss and checkpoint
+   selection rather than more capacity),
 2. router-aware losses: the router KD term did not improve agreement at the
    budgets tried, so the correction has to repair the state the router reads,
 3. ternarising the correction sidecar (TAARDIS ships branches at 2 bits per
