@@ -254,7 +254,9 @@ residual add while the `moe_out` branch corrects the block output.  A small
 hyperparameter screen kept the inherited temperature (2.0) and LR schedule and
 rejected faster decay, rank 2048, and AdamW (which diverges at the shared LR);
 `--kd-weight 1.0` was the one win over the inherited 0.5 (21.78 vs 21.99 on
-the screening protocol).
+the screening protocol).  Rank 512 per placement is sufficient for the
+combined model: rank 1024 each gives the same 19.11 on the 8-window protocol
+at 2x the adapter size.
 
 The deployed-format tax on this base is small: training the same `attn_out`
 branches in fp32 (no STE) gives 21.11 vs 21.42 on the 8-window protocol (1.4%),
