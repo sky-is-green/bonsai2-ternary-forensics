@@ -226,7 +226,7 @@ teacher 11.02):
 | placement | PPL (8w) | router agreement | delivery |
 |---|---|---|---|
 | RTN (deployable quantizer) | 804.39 | 0.691 | — |
-| branches on the MoE block output (`moe_out`) | **19.80** | **0.846** | small runtime op |
+| branches on the MoE block output (`moe_out`) | **19.80** | **0.846** | fork extension (validated) |
 | branches on the attention output (`attn_out`) | 21.42 | 0.828 | standard llama.cpp LoRA |
 
 `attn_out` costs 1.7 PPL (~8%) against the best placement and needs no
@@ -237,6 +237,14 @@ native 2.125 bpw container (8.9 MB for 16 layers, bit-exact with the f16
 export).  The trained routers ride along as exact rank-64 `ffn_gate_inp` LoRA
 pairs (dense f16, +4.3 MB); they are part of the evaluated model and are worth
 including.
+
+The `moe_out` branch has no base tensor to attach to, so the fork grows a
+small extension: the adapter may carry `blk.N.ffn_moe_out.weight.lora_a/b`,
+and the OLMoE graph adds `lora_b(lora_a(normed_block_input))` to the MoE output
+(`build_lora_branch` in `llama-graph.cpp`, hooked in `models/olmoe.cpp`; fork
+branch `moe-corr-runtime`, ~90 lines).  The placement gain transfers to the
+runtime: the rank-512 `moe_out` adapter reaches 14.63 with routers against
+15.77 for the `attn_out` adapter on the same 563-chunk protocol.
 
 The deployed-format tax on this base is small: training the same `attn_out`
 branches in fp32 (no STE) gives 21.11 vs 21.42 on the 8-window protocol (1.4%),
@@ -253,13 +261,15 @@ End-to-end in the TAARDIS fork (mixed Q1-expert/Q8-rest GGUF,
 | build | PPL | size |
 |---|---|---|
 | mixed GGUF, uncorrected | 566.7 | 2.12 GB |
-| + branches LoRA (rank 512) | 16.17 | +8.9 MB |
-| + branches + routers (rank 512) | 15.77 | +13.2 MB |
-| + branches LoRA (rank 1024) | 15.89 | +17.8 MB |
-| + branches + routers (rank 1024) | **15.61** | +22.2 MB |
+| + `attn_out` branches (rank 512) | 16.17 | +8.9 MB |
+| + `attn_out` branches + routers (rank 512) | 15.77 | +13.2 MB |
+| + `attn_out` branches + routers (rank 1024) | 15.61 | +22.2 MB |
+| + `moe_out` branches (rank 512) | 14.87 | +8.9 MB |
+| + `moe_out` branches + routers (rank 512) | **14.63** | +13.2 MB |
 
 CPU and HIP agree (uncorrected 566.59 vs 566.74; corrected within 0.002 PPL),
-and the ternary expert kernels run on the local GPUs at ~10x the CPU speed.
+and the ternary expert kernels plus the fork extension run on the local GPUs
+at ~10x the CPU speed.
 The correction transfers to the GGUF base at the same ratio as the harness
 (~35x on the sequential-chunk runtime protocol vs ~38x on the harder
 random-window harness protocol), so the runtime absolute PPL is lower than the
@@ -300,7 +310,7 @@ fairness rules.
 
 | route | mechanism | cost | status |
 |---|---|---|---|
-| A | in-place ternary + trained residual-stream corrections | single 80 GB card or 2x40 GB for the correction run; no 263 GB fp32-master QAT | placement rule established; with the deployable quantizer: 19.80 (`moe_out`) / 20.93 (`attn_out` rank 1024, LoRA-deliverable) on the 4,096-window recipe, 17.8-22.2 MB sidecar; LoRA delivery verified end-to-end in the fork (566.7 uncorrected -> 15.61 corrected on 563 wikitext chunks) |
+| A | in-place ternary + trained residual-stream corrections | single 80 GB card or 2x40 GB for the correction run; no 263 GB fp32-master QAT | placement rule established; with the deployable quantizer: 19.80 (`moe_out`, fork extension validated) / 20.93 (`attn_out` rank 1024, standard LoRA) on the 4,096-window recipe, 13.2-22.2 MB sidecar; delivery verified end-to-end in the fork (566.7 uncorrected -> 14.63 with the extension, 15.61 as standard LoRA, on 563 wikitext chunks) |
 | B | MoTE-style re-architecture (frozen FP component carries the function) | cheap training, larger artifact | demonstrated at 1.5B/3B |
 | C | MoE-aware mixed-precision PTQ (APEX-style) | cheapest, ~2.8 bpw | published, Bonsai-class retention |
 
@@ -321,10 +331,11 @@ Route A is the one this work opens: it reaches ternary bit budgets without the
    the 19.80 result, so the ~2 bpw total claim is met as shipped,
 4. serving: ternary experts run today on the TAARDIS fork (verified on CPU and
    GPU: 2.12 GB mixed OLMoE GGUF, Q1_0_g128 expert banks, ~10x CPU speed on the
-   local cards); branch delivery is resolved for the LoRA-mappable `attn_out`
-   placement (8.9-13.2 MB adapter, 566.7 -> 15.77 on 563 wikitext chunks).
-   The `moe_out` placement is still 1.7 PPL better and would need a small
-   runtime op in a fork,
+   local cards); branch delivery is resolved for both placements: `attn_out`
+   ships as a standard LoRA (8.9-22.2 MB, 566.7 -> 15.61), and the better
+   `moe_out` placement has a validated fork extension (branch
+   `moe-corr-runtime`, ~90 lines; 566.7 -> 14.63).  Publishing the fork
+   extension is the remaining step,
 5. the iso-compute ladder for capacity-vs-compute separation (0.6B 51.9% and
    1.7B 63.6% on WikiText; the primary ladder closed without the 4B rung, see
    [`SCALING-PROTOCOL.md`](SCALING-PROTOCOL.md)).
