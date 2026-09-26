@@ -65,10 +65,17 @@ huggingface-cli download allenai/OLMoE-1B-7B-0924 \
 HIP_VISIBLE_DEVICES=1 python olmoe_proxy.py cache \
     --windows 4096 --corpus-chars 50000000 --device cuda:0
 
-# 2. per-layer residual-stream corrections (route A); both cards for the
-#    brief teacher/student coexistence.  --quant lloyd matches the deployable
+# 1b. once: precompute the teacher router refs for the in-run eval so training
+#     never loads the teacher (single-card training; the 'both cards' path
+#     still works when --ref-file is omitted)
+HIP_VISIBLE_DEVICES=1 python olmoe_corrections.py ref --device cuda:0 \
+    --ref-file $MOE_ARTIFACTS/olmoe/eval-ref-w2.pt
+
+# 2. per-layer residual-stream corrections (route A); single card with
+#    precomputed eval refs (step 1b).  --quant lloyd matches the deployable
 #    Q1_0_g128 quantizer, so training sees the deployment quantizer exactly.
-HIP_VISIBLE_DEVICES=0,1 python olmoe_corrections.py train --device-map auto \
+HIP_VISIBLE_DEVICES=1 python olmoe_corrections.py train --device-map cuda:0 \
+    --ref-file $MOE_ARTIFACTS/olmoe/eval-ref-w2.pt \
     --rank 512 --quant lloyd --branch-quant g128 \
     --windows 4096 --corpus-chars 50000000 --epochs 2 \
     --lr-half-every 500 --lr-decay-start 2000 --router-weight 0

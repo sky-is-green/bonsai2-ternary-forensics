@@ -218,6 +218,31 @@ def quick_eval(model, data, args, ref=None):
     return ppl, (sum(agree) / len(agree) if agree else None)
 
 
+@torch.no_grad()
+def build_ref(args):
+    """Precompute the teacher router references for the in-run eval windows.
+
+    With this file, training never needs the teacher resident, so it can run
+    on a single card.
+    """
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(MODEL)
+    data = windows(tok, 2, args.seq, 999, "wikitext")
+    teacher, _ = load_model(args.device)
+    ref = {}
+    for i in range(len(data)):
+        ids = data[i:i + 1].to(args.device)
+        store = {}
+        hs = [layer.mlp.gate.register_forward_hook(gate_hook(store, j))
+              for j, layer in enumerate(teacher.model.layers)]
+        teacher(ids)
+        for h in hs:
+            h.remove()
+        ref[i] = {j: store[j][2].cpu() for j in store}
+    torch.save(ref, args.ref_file)
+    print(f"wrote {args.ref_file} ({len(ref)} windows)", flush=True)
+
+
 def train(args):
     model, tok = build(args)
     cache_path = getattr(args, "cache_file", "") or CACHE
@@ -229,25 +254,28 @@ def train(args):
                    max_chars=args.corpus_chars)
     # teacher router reference for the agreement metric
     ref = None
+    ev = None
     if args.eval_every:
-        from transformers import AutoModelForCausalLM
-        mm = {0: "14GiB", 1: "19GiB"} if args.device_map == "auto" else None
-        teacher, _ = load_model(args.device_map, mm)
         ev = windows(tok, 2, args.seq, 999, "wikitext")
-        ref = {}
-        for i in range(len(ev)):
-            ids = ev[i:i + 1].to(args.device)
-            store = {}
-            hs = [layer.mlp.gate.register_forward_hook(gate_hook(store, j))
-                  for j, layer in enumerate(teacher.model.layers)]
-            teacher(ids)
-            for h in hs:
-                h.remove()
-            ref[i] = {j: store[j][2].cpu() for j in store}
-        del teacher
-        torch.cuda.empty_cache()
-    else:
-        ev = None
+        if args.ref_file and Path(args.ref_file).exists():
+            ref = torch.load(args.ref_file, map_location="cpu")
+            print(f"loaded eval refs from {args.ref_file}", flush=True)
+        else:
+            from transformers import AutoModelForCausalLM
+            mm = {0: "14GiB", 1: "19GiB"} if args.device_map == "auto" else None
+            teacher, _ = load_model(args.device_map, mm)
+            ref = {}
+            for i in range(len(ev)):
+                ids = ev[i:i + 1].to(args.device)
+                store = {}
+                hs = [layer.mlp.gate.register_forward_hook(gate_hook(store, j))
+                      for j, layer in enumerate(teacher.model.layers)]
+                teacher(ids)
+                for h in hs:
+                    h.remove()
+                ref[i] = {j: store[j][2].cpu() for j in store}
+            del teacher
+            torch.cuda.empty_cache()
 
     params = [p for p in model.parameters() if p.requires_grad]
     if getattr(args, "optimizer", "adafactor") == "adamw":
@@ -395,7 +423,7 @@ def evaluate(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("stage", choices=["train", "eval"])
+    ap.add_argument("stage", choices=["train", "eval", "ref"])
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--device-map", default="cuda:0")
     ap.add_argument("--windows", type=int, default=512)
@@ -442,9 +470,15 @@ def main():
                     help="'base' keeps branch-only corrections (what a LoRA adapter ships) "
                          "while evaluating")
     ap.add_argument("--load", default="")
+    ap.add_argument("--ref-file", default="",
+                    help="precomputed teacher router refs for the in-run eval "
+                         "(build with the 'ref' stage); avoids loading the teacher "
+                         "during training so a single card suffices")
     args = ap.parse_args()
     if args.stage == "train":
         train(args)
+    elif args.stage == "ref":
+        build_ref(args)
     else:
         evaluate(args)
 
