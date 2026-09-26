@@ -150,11 +150,15 @@ def gate_hook(store, i):
 
 # ------------------------------------------------------------------- cache ---
 
+FEAT_STRIDE = 4   # token stride for cached hidden-state distillation targets
+
+
 @torch.no_grad()
 def stage_cache(args):
     model, tok = load_model(args.device)
     data = windows(tok, args.windows, args.seq, args.seed,
                    max_chars=args.corpus_chars)
+    feat_states = bool(getattr(args, "feat_states", False))
     recs = []
     for w in range(len(data)):
         ids = data[w:w + 1].to(args.device)
@@ -162,21 +166,32 @@ def stage_cache(args):
         hs = []
         for i, layer in enumerate(model.model.layers):
             hs.append(layer.mlp.gate.register_forward_hook(gate_hook(store, i)))
+        fstore = {}
+        fh = None
+        if feat_states:
+            fh = model.model.norm.register_forward_hook(
+                lambda m, inp, out: fstore.__setitem__("feat", out))
         logits = model(ids).logits
         for h in hs:
             h.remove()
+        if fh is not None:
+            fh.remove()
         t_top = logits[:, :-1].topk(args.top_logits, dim=-1)
         router = {i: (store[i][2].cpu().to(torch.int16),
                       store[i][1].cpu().to(torch.float16))
                   for i in store}
-        recs.append({"idx": t_top.indices.cpu().to(torch.int32),
-                     "val": t_top.values.cpu().to(torch.float16),
-                     "router": router})
+        rec = {"idx": t_top.indices.cpu().to(torch.int32),
+               "val": t_top.values.cpu().to(torch.float16),
+               "router": router}
+        if feat_states:
+            rec["feat"] = fstore["feat"][0][::FEAT_STRIDE].cpu().to(torch.float16)
+        recs.append(rec)
         if w % 100 == 0:
             print(f"cached {w}/{len(data)}", flush=True)
     OUT.mkdir(parents=True, exist_ok=True)
-    torch.save(recs, CACHE)
-    print(f"wrote {CACHE} ({CACHE.stat().st_size/1e9:.2f} GB)")
+    path = Path(args.out) if getattr(args, "out", "") else CACHE
+    torch.save(recs, path)
+    print(f"wrote {path} ({path.stat().st_size/1e9:.2f} GB)")
 
 
 # ------------------------------------------------------------------- train ---
@@ -353,6 +368,11 @@ def main():
     ap.add_argument("--train-layers", default="all")
     ap.add_argument("--master-dtype", default="bf16", choices=["bf16", "fp32"])
     ap.add_argument("--top-logits", type=int, default=50)
+    ap.add_argument("--feat-states", action="store_true",
+                    help="also cache the final-norm hidden states (token stride "
+                         f"{FEAT_STRIDE}) for feature distillation")
+    ap.add_argument("--out", default="",
+                    help="cache output path (default: $MOE_ARTIFACTS/olmoe/teacher-cache.pt)")
     ap.add_argument("--steps", type=int, default=0)
     ap.add_argument("--epochs", type=int, default=1)
     ap.add_argument("--lr", type=float, default=5e-5)

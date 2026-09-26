@@ -30,8 +30,8 @@ import torch.nn.functional as F
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from moe_proxy import ternary_absmean, ternary_lloyd  # noqa: E402
-from olmoe_proxy import (CACHE, MODEL, OUT, gate_hook, load_model,  # noqa: E402
-                         parse_layers, windows)
+from olmoe_proxy import (CACHE, FEAT_STRIDE, MODEL, OUT, gate_hook,  # noqa: E402
+                         load_model, parse_layers, windows)
 
 
 @torch.no_grad()
@@ -143,12 +143,13 @@ def build(args):
         quantize_bank_inplace(experts.down_proj, args.group, kind=args.quant)
         dev = next(layer.mlp.parameters()).device
         quant = "fp32" if i in fp16 else args.branch_quant
-        if getattr(args, "branch_target", "moe_out") == "attn_out":
+        target = getattr(args, "branch_target", "moe_out")
+        if target in ("attn_out", "both"):
             # LoRA-mappable placement: the correction reads the attention
             # context and writes into the residual stream before the router.
             layer.self_attn.o_proj = MoEWithCorrection(
                 layer.self_attn.o_proj, hidden, args.rank, quant, args.quant).to(dev)
-        else:
+        if target in ("moe_out", "both"):
             layer.mlp = MoEWithCorrection(layer.mlp, hidden, args.rank, quant, args.quant).to(dev)
     if fp16:
         print(f"mixed sidecar: fp16 branches on layers {sorted(fp16)}", flush=True)
@@ -249,7 +250,10 @@ def train(args):
         ev = None
 
     params = [p for p in model.parameters() if p.requires_grad]
-    opt = torch.optim.Adafactor(params, lr=args.lr, weight_decay=0.0)
+    if getattr(args, "optimizer", "adafactor") == "adamw":
+        opt = torch.optim.AdamW(params, lr=args.lr, weight_decay=args.weight_decay)
+    else:
+        opt = torch.optim.Adafactor(params, lr=args.lr, weight_decay=args.weight_decay)
     model.train()
     step = 0
     for epoch in range(args.epochs):
@@ -258,9 +262,16 @@ def train(args):
             store = {}
             hs = [moe_block(layer).gate.register_forward_hook(gate_hook(store, j))
                   for j, layer in enumerate(model.model.layers)]
+            fstore = {}
+            fh = None
+            if args.feat_weight > 0:
+                fh = model.model.norm.register_forward_hook(
+                    lambda m, inp, out: fstore.__setitem__("feat", out))
             logits = model(ids).logits
             for h in hs:
                 h.remove()
+            if fh is not None:
+                fh.remove()
             lm = F.cross_entropy(logits[:, :-1].reshape(-1, logits.shape[-1]).float(),
                                  ids[:, 1:].reshape(-1))
             ti = rec["idx"].to(logits.device)
@@ -282,7 +293,12 @@ def train(args):
                     rkd = rkd + F.kl_div(s_p.clamp_min(1e-9).log(), t_p,
                                          reduction="batchmean").to(rkd.device)
                 rkd = rkd / len(model.model.layers)
-            loss = lm + args.kd_weight * kd + args.router_weight * rkd
+            feat = torch.zeros((), device=args.device)
+            if args.feat_weight > 0 and "feat" in rec:
+                sf = fstore["feat"][0][::FEAT_STRIDE].float()
+                tf = rec["feat"].to(sf.device).float()
+                feat = 1.0 - F.cosine_similarity(sf, tf, dim=-1).mean()
+            loss = lm + args.kd_weight * kd + args.router_weight * rkd + args.feat_weight * feat
             loss.backward()
             opt.step()
             opt.zero_grad(set_to_none=True)
@@ -293,8 +309,9 @@ def train(args):
                     g["lr"] *= 0.5
                 print(f"step {step}: lr -> {opt.param_groups[0]['lr']:.3e}", flush=True)
             if step % args.log_every == 0:
+                extra = f" feat {float(feat):.4f}" if args.feat_weight > 0 else ""
                 print(f"step {step} lm {lm.item():.4f} kd {kd.item():.4f} "
-                      f"rkd {float(rkd):.4f} total {loss.item():.4f}", flush=True)
+                      f"rkd {float(rkd):.4f} total {loss.item():.4f}{extra}", flush=True)
             if args.eval_every and step % args.eval_every == 0 and ev is not None:
                 ppl, ag = quick_eval(model, ev, args, ref)
                 print(f"  [eval] step {step} ppl {ppl:.2f} "
@@ -399,8 +416,9 @@ def main():
                     help="deployed branch format; STE-trained when != fp32")
     ap.add_argument("--branch-quant-fp16-layers", default="",
                     help="comma-separated layer indices kept fp32 in a mixed sidecar")
-    ap.add_argument("--branch-target", choices=["moe_out", "attn_out"], default="moe_out",
-                    help="where the correction reads/writes; attn_out is LoRA-mappable")
+    ap.add_argument("--branch-target", choices=["moe_out", "attn_out", "both"], default="moe_out",
+                    help="where the correction reads/writes; attn_out is LoRA-mappable, "
+                         "both trains the two placements together")
     ap.add_argument("--tag", default="", help="optional run tag for checkpoint names")
     ap.add_argument("--lr-half-every", type=int, default=0,
                     help="halve the LR every N steps (0=off)")
@@ -409,8 +427,13 @@ def main():
     ap.add_argument("--steps", type=int, default=0)
     ap.add_argument("--epochs", type=int, default=2)
     ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--optimizer", choices=["adafactor", "adamw"], default="adafactor")
+    ap.add_argument("--weight-decay", type=float, default=0.0)
     ap.add_argument("--temp", type=float, default=2.0)
     ap.add_argument("--kd-weight", type=float, default=0.5)
+    ap.add_argument("--feat-weight", type=float, default=0.0,
+                    help="cosine feature-distillation weight on the final-norm hidden "
+                         "states (requires a cache built with --feat-states)")
     ap.add_argument("--router-weight", type=float, default=0.5)
     ap.add_argument("--log-every", type=int, default=25)
     ap.add_argument("--ckpt-every", type=int, default=500)

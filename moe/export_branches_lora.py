@@ -123,7 +123,7 @@ def main():
     ap.add_argument("--load", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--arch", default="olmoe")
-    ap.add_argument("--target", choices=["attn_out", "moe_out"], default="attn_out")
+    ap.add_argument("--target", choices=["attn_out", "moe_out", "both"], default="attn_out")
     ap.add_argument("--taardis", action="store_true",
                     help="declare taardis-lora instead of plain lora")
     ap.add_argument("--dtype", choices=["f16", "f32", "q1_0_g128"], default="f16",
@@ -144,23 +144,31 @@ def main():
 
     if args.routers and not args.base_model:
         raise SystemExit("--routers needs --base-model")
-    target_tensor = {"attn_out": "attn_output.weight",
-                     "moe_out": "ffn_moe_out.weight"}[args.target]
+    wanted = {"attn_out": {"attn_output.weight"},
+              "moe_out": {"ffn_moe_out.weight"},
+              "both": {"attn_output.weight", "ffn_moe_out.weight"}}[args.target]
 
     sd = torch.load(args.load, map_location="cpu")
     sd = {k.replace(".doctor.", ".branch."): v for k, v in sd.items()}
-    downs = {}
-    ups = {}
+    pairs = {}
     for key, tensor in sd.items():
-        if key.endswith(".branch.down.weight"):
-            downs[layer_index(key)] = tensor
-        elif key.endswith(".branch.up.weight"):
-            ups[layer_index(key)] = tensor
-    layers = sorted(set(downs) & set(ups))
-    if not layers:
-        raise SystemExit(f"no branch tensors found in {args.load}")
-    rank = downs[layers[0]].shape[0]
-    print(f"exporting {len(layers)} branches, rank {rank}, "
+        if key.endswith(".self_attn.o_proj.branch.down.weight"):
+            target, which = "attn_output.weight", "down"
+        elif key.endswith(".self_attn.o_proj.branch.up.weight"):
+            target, which = "attn_output.weight", "up"
+        elif key.endswith(".mlp.branch.down.weight"):
+            target, which = "ffn_moe_out.weight", "down"
+        elif key.endswith(".mlp.branch.up.weight"):
+            target, which = "ffn_moe_out.weight", "up"
+        else:
+            continue
+        if target in wanted:
+            pairs.setdefault((layer_index(key), target), {})[which] = tensor
+    pairs = {k: v for k, v in pairs.items() if "down" in v and "up" in v}
+    if not pairs:
+        raise SystemExit(f"no branch tensors for target '{args.target}' found in {args.load}")
+    rank = next(iter(pairs.values()))["down"].shape[0]
+    print(f"exporting {len(pairs)} branch tensors, rank {rank}, "
           f"deploy-quant {args.deploy_quant}/{args.branch_quant}")
 
     w = GGUFWriter(args.out, arch=args.arch)
@@ -174,12 +182,12 @@ def main():
         raw_qtype = GGMLQuantizationType.Q1_0_g128
     dense_dtype = np.float32 if args.dtype == "f32" else np.float16
 
-    for i in layers:
-        down, up = deploy_weights(downs[i], ups[i], args.branch_quant, args.deploy_quant)
+    for (i, target), t in sorted(pairs.items()):
+        down, up = deploy_weights(t["down"], t["up"], args.branch_quant, args.deploy_quant)
         # gguf-py reverses dims on write: passing [rank, in] / [out, rank]
         # stores ne [in, rank] / [rank, out], matching the reference adapters.
-        add_factor(w, f"blk.{i}.{target_tensor}.lora_a", down, args.dtype, raw_qtype)
-        add_factor(w, f"blk.{i}.{target_tensor}.lora_b", up, args.dtype, raw_qtype)
+        add_factor(w, f"blk.{i}.{target}.lora_a", down, args.dtype, raw_qtype)
+        add_factor(w, f"blk.{i}.{target}.lora_b", up, args.dtype, raw_qtype)
 
     if args.routers:
         base = load_base_routers(args.base_model)
