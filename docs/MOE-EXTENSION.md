@@ -241,6 +241,8 @@ including.
 The deployed-format tax on this base is small: training the same `attn_out`
 branches in fp32 (no STE) gives 21.11 vs 21.42 on the 8-window protocol (1.4%),
 so the 8.9 MB compact adapter is the right trade against a 67 MB dense one.
+Rank is another dial: rank 1024 reaches 20.93 / 0.829 at 2x the sidecar
+(17.8 MB compact), closing a third of the `moe_out` gap.
 
 End-to-end in the TAARDIS fork (mixed Q1-expert/Q8-rest GGUF,
 `wiki.test.raw`, c512, 563 chunks, GPU):
