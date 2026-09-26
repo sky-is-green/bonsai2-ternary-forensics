@@ -242,7 +242,10 @@ The deployed-format tax on this base is small: training the same `attn_out`
 branches in fp32 (no STE) gives 21.11 vs 21.42 on the 8-window protocol (1.4%),
 so the 8.9 MB compact adapter is the right trade against a 67 MB dense one.
 Rank is another dial: rank 1024 reaches 20.93 / 0.829 at 2x the sidecar
-(17.8 MB compact), closing a third of the `moe_out` gap.
+(17.8 MB compact), closing a third of the `moe_out` gap.  The data slope,
+however, is flat under Lloyd: 8,192 unique windows at matched steps did not
+beat 4,096 windows x 2 epochs (2-window step 5000: 23.99 vs 23.85), so the
+4,096-window budget is sufficient for this recipe.
 
 End-to-end in the TAARDIS fork (mixed Q1-expert/Q8-rest GGUF,
 `wiki.test.raw`, c512, 563 chunks, GPU):
@@ -250,8 +253,10 @@ End-to-end in the TAARDIS fork (mixed Q1-expert/Q8-rest GGUF,
 | build | PPL | size |
 |---|---|---|
 | mixed GGUF, uncorrected | 566.7 | 2.12 GB |
-| + branches LoRA | 16.17 | +8.9 MB |
-| + branches + routers | **15.77** | +13.2 MB |
+| + branches LoRA (rank 512) | 16.17 | +8.9 MB |
+| + branches + routers (rank 512) | 15.77 | +13.2 MB |
+| + branches LoRA (rank 1024) | 15.89 | +17.8 MB |
+| + branches + routers (rank 1024) | **15.61** | +22.2 MB |
 
 CPU and HIP agree (uncorrected 566.59 vs 566.74; corrected within 0.002 PPL),
 and the ternary expert kernels run on the local GPUs at ~10x the CPU speed.
@@ -295,7 +300,7 @@ fairness rules.
 
 | route | mechanism | cost | status |
 |---|---|---|---|
-| A | in-place ternary + trained residual-stream corrections | single 80 GB card or 2x40 GB for the correction run; no 263 GB fp32-master QAT | placement rule established; with the deployable quantizer: 19.80 (`moe_out`) / 21.42 (`attn_out`, LoRA-deliverable) on the 4,096-window recipe, 8.9-13.2 MB sidecar; LoRA delivery verified end-to-end in the fork (566.7 uncorrected -> 15.77 corrected on 563 wikitext chunks) |
+| A | in-place ternary + trained residual-stream corrections | single 80 GB card or 2x40 GB for the correction run; no 263 GB fp32-master QAT | placement rule established; with the deployable quantizer: 19.80 (`moe_out`) / 20.93 (`attn_out` rank 1024, LoRA-deliverable) on the 4,096-window recipe, 17.8-22.2 MB sidecar; LoRA delivery verified end-to-end in the fork (566.7 uncorrected -> 15.61 corrected on 563 wikitext chunks) |
 | B | MoTE-style re-architecture (frozen FP component carries the function) | cheap training, larger artifact | demonstrated at 1.5B/3B |
 | C | MoE-aware mixed-precision PTQ (APEX-style) | cheapest, ~2.8 bpw | published, Bonsai-class retention |
 
