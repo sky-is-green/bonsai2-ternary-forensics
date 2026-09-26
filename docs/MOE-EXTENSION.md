@@ -226,8 +226,9 @@ teacher 11.02):
 | placement | PPL (8w) | router agreement | delivery |
 |---|---|---|---|
 | RTN (deployable quantizer) | 804.39 | 0.691 | — |
-| branches on the MoE block output (`moe_out`) | **19.80** | **0.846** | fork extension (validated) |
-| branches on the attention output (`attn_out`) | 21.42 | 0.828 | standard llama.cpp LoRA |
+| `moe_out`, rank 512 / 1024 | 19.80 / 19.57 | 0.846 / 0.850 | fork extension (validated) |
+| `attn_out`, rank 512 / 1024 | 21.42 / 20.93 | 0.828 / 0.829 | standard llama.cpp LoRA |
+| both placements, rank 512 each | **19.11** | 0.847 | LoRA + fork extension |
 
 `attn_out` costs 1.7 PPL (~8%) against the best placement and needs no
 runtime change: the branch is a rank-512 update on `attn_output.weight`, which
@@ -245,6 +246,15 @@ and the OLMoE graph adds `lora_b(lora_a(normed_block_input))` to the MoE output
 branch `moe-corr-runtime`, ~90 lines).  The placement gain transfers to the
 runtime: the rank-512 `moe_out` adapter reaches 14.63 with routers against
 15.77 for the `attn_out` adapter on the same 563-chunk protocol.
+
+Training the two placements jointly (rank 512 each; the same 22.2 MB adapter
+as `moe_out` rank 1024) beats either alone — 19.11 / 0.847 on the 8-window
+protocol — because the `attn_out` branch repairs the attention path before the
+residual add while the `moe_out` branch corrects the block output.  A small
+hyperparameter screen kept the inherited temperature (2.0) and LR schedule and
+rejected faster decay, rank 2048, and AdamW (which diverges at the shared LR);
+`--kd-weight 1.0` was the one win over the inherited 0.5 (21.78 vs 21.99 on
+the screening protocol).
 
 The deployed-format tax on this base is small: training the same `attn_out`
 branches in fp32 (no STE) gives 21.11 vs 21.42 on the 8-window protocol (1.4%),
@@ -265,7 +275,9 @@ End-to-end in the TAARDIS fork (mixed Q1-expert/Q8-rest GGUF,
 | + `attn_out` branches + routers (rank 512) | 15.77 | +13.2 MB |
 | + `attn_out` branches + routers (rank 1024) | 15.61 | +22.2 MB |
 | + `moe_out` branches (rank 512) | 14.87 | +8.9 MB |
-| + `moe_out` branches + routers (rank 512) | **14.63** | +13.2 MB |
+| + `moe_out` branches + routers (rank 512) | 14.63 | +13.2 MB |
+| + `moe_out` branches + routers (rank 1024) | 14.61 | +22.2 MB |
+| + both placements + routers (rank 512 each) | **14.48** | +22.2 MB |
 
 CPU and HIP agree (uncorrected 566.59 vs 566.74; corrected within 0.002 PPL),
 and the ternary expert kernels plus the fork extension run on the local GPUs
