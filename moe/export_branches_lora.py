@@ -1,10 +1,14 @@
 """Export trained correction branches as a llama.cpp LoRA adapter GGUF.
 
-For ``--branch-target attn_out`` checkpoints, each branch becomes a LoRA on
-the attention output projection, matching the TAARDIS adapter convention:
+``attn_out`` checkpoints become a LoRA on the attention output projection,
+matching the TAARDIS adapter convention:
 
     blk.N.attn_output.weight.lora_a   (gguf dims [in, rank]  <- down.weight [rank, in])
     blk.N.attn_output.weight.lora_b   (gguf dims [rank, out] <- up.weight [out, rank])
+
+``moe_out`` checkpoints become a LoRA-only branch with no base tensor
+(``blk.N.ffn_moe_out.weight``); the fork applies it to the MoE block output
+(``build_lora_branch`` in llama-graph.cpp, hooked in models/olmoe.cpp).
 
 and the metadata:
 
@@ -138,10 +142,10 @@ def main():
                          "checkpoint was trained against")
     args = ap.parse_args()
 
-    if args.target == "moe_out":
-        raise SystemExit("moe_out branches are not LoRA-mappable; export is not possible")
     if args.routers and not args.base_model:
         raise SystemExit("--routers needs --base-model")
+    target_tensor = {"attn_out": "attn_output.weight",
+                     "moe_out": "ffn_moe_out.weight"}[args.target]
 
     sd = torch.load(args.load, map_location="cpu")
     sd = {k.replace(".doctor.", ".branch."): v for k, v in sd.items()}
@@ -174,16 +178,22 @@ def main():
         down, up = deploy_weights(downs[i], ups[i], args.branch_quant, args.deploy_quant)
         # gguf-py reverses dims on write: passing [rank, in] / [out, rank]
         # stores ne [in, rank] / [rank, out], matching the reference adapters.
-        add_factor(w, f"blk.{i}.attn_output.weight.lora_a", down, args.dtype, raw_qtype)
-        add_factor(w, f"blk.{i}.attn_output.weight.lora_b", up, args.dtype, raw_qtype)
+        add_factor(w, f"blk.{i}.{target_tensor}.lora_a", down, args.dtype, raw_qtype)
+        add_factor(w, f"blk.{i}.{target_tensor}.lora_b", up, args.dtype, raw_qtype)
 
     if args.routers:
         base = load_base_routers(args.base_model)
         n_routers = 0
+        r_router = 0
         for key, trained in sd.items():
-            if not key.endswith(".mlp.gate.weight") or key not in base:
+            if not key.endswith(".mlp.gate.weight"):
                 continue
-            delta = trained.float() - base[key]          # [out, in]
+            # the moe_out wrapper nests the block, so its gate key is
+            # ...mlp.mlp.gate.weight while the base model stores ...mlp.gate.weight
+            base_key = key.replace(".mlp.mlp.gate.weight", ".mlp.gate.weight")
+            if base_key not in base:
+                continue
+            delta = trained.float() - base[base_key]      # [out, in]
             u, s, vh = torch.linalg.svd(delta, full_matrices=False)
             a = vh.numpy()                               # [rank, in]
             b = (u * s[None, :]).numpy()                 # [out, rank]
@@ -192,8 +202,9 @@ def main():
                          np.ascontiguousarray(a).astype(dense_dtype))
             w.add_tensor(f"blk.{i}.ffn_gate_inp.weight.lora_b",
                          np.ascontiguousarray(b).astype(dense_dtype))
+            r_router = a.shape[0]
             n_routers += 1
-        print(f"exported {n_routers} router deltas (rank {a.shape[0]}, dense)")
+        print(f"exported {n_routers} router deltas (rank {r_router}, dense)")
 
     w.write_header_to_file()
     w.write_kv_data_to_file()
