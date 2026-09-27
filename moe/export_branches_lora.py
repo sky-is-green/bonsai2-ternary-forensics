@@ -99,6 +99,18 @@ def add_factor(w: GGUFWriter, name: str, tensor: torch.Tensor, dtype: str,
         w.add_tensor(name, np.ascontiguousarray(tensor.float().numpy()).astype(np_dtype))
 
 
+def router_canon(key: str) -> str:
+    """Canonical router key: from ``layers.`` on, without the branch nesting.
+
+    Handles the HF prefix (``model.language_model.`` / ``model.``), the
+    wrapped gate (``...mlp.mlp.gate.weight``) and plain gates alike, so the
+    checkpoint and the base model always compare like for like.
+    """
+    i = key.find("layers.")
+    k = key[i:] if i >= 0 else key
+    return k.replace(".mlp.mlp.gate.weight", ".mlp.gate.weight")
+
+
 def load_base_routers(base_model: str) -> dict:
     """Load ``model.layers.N.mlp.gate.weight`` from an HF safetensors dir or .pt file."""
     path = Path(base_model)
@@ -109,10 +121,10 @@ def load_base_routers(base_model: str) -> dict:
             with safe_open(f, framework="pt") as sf:
                 for k in sf.keys():
                     if k.endswith(".mlp.gate.weight"):
-                        out[k] = sf.get_tensor(k).float()
+                        out[router_canon(k)] = sf.get_tensor(k).float()
     else:
         sd = torch.load(path, map_location="cpu")
-        out = {k: v.float() for k, v in sd.items() if k.endswith(".mlp.gate.weight")}
+        out = {router_canon(k): v.float() for k, v in sd.items() if k.endswith(".mlp.gate.weight")}
     if not out:
         raise SystemExit(f"no router weights found under {base_model}")
     return out
@@ -202,9 +214,9 @@ def main():
         for key, trained in sd.items():
             if not key.endswith(".mlp.gate.weight"):
                 continue
-            # the moe_out wrapper nests the block, so its gate key is
-            # ...mlp.mlp.gate.weight while the base model stores ...mlp.gate.weight
-            base_key = key.replace(".mlp.mlp.gate.weight", ".mlp.gate.weight")
+            # canonicalize both sides: the wrapped gate nests the block
+            # (``...mlp.mlp.gate.weight``) and the base may carry an HF prefix
+            base_key = router_canon(key)
             if base_key not in base:
                 continue
             delta = trained.float() - base[base_key]      # [out, in]
