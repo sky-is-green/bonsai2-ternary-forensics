@@ -44,12 +44,37 @@ discussion thread: [Prism model page, discussion
   signature. Rotation-in-the-loop + STE/KD + a managed schedule accounts for the
   gap. See [`docs/FORENSIC-ARCHIVE.md`](docs/FORENSIC-ARCHIVE.md).
 
+## Where this led (research paths)
+
+This repository is the dense-model forensics; the programme it started kept
+going. The paths it produced, in order:
+
+1. **Dense forensics → settled** (findings above): container recovered, the
+   residual is trained placement, public PTQ is a calibration artifact
+   (F1–F4); Track B ships the capability from Prism's released weights.
+2. **Local QAT/KD canary → priced, deliberately not funded** (F5–F8, F11):
+   1.7B STE+KD was retracted to ~48% retention on a clean holdout; the 27B
+   proof-run is mapped and unfunded.
+3. **MoE extension → its own repository** ([sky-is-green/scion](https://github.com/sky-is-green/scion)):
+   in-place ternary MoE + trained corrections; the placement rule, the AUTOGRID
+   noise-floor map, the deployable Lloyd quantizer; OLMoE 566.7 → 14.48, then
+   the 35B release [Scion-35B-A3B](https://huggingface.co/SkyIsNotGreen/Scion-35B-A3B)
+   (11.34 GB / 2.61 bpw, task-level Q4-class).
+4. **Serving** (measured there): ternary halves the CPU-offload penalty vs
+   f16; threads = physical cores; don't layer-split when one card fits; the
+   hot-expert cache is a measured no-gain — sparse dispatch is the real project.
+5. **Open path (current)** — the KLD tail beyond the teacher's top-50:
+   [scion/docs/TAIL-EXPERIMENT-PLAN.md](https://github.com/sky-is-green/scion/blob/main/docs/TAIL-EXPERIMENT-PLAN.md) (queued; calibration-free constraint).
+6. **Shelved** — the DSpark drafter track
+   ([`docs/DSPARK-TRACK.md`](docs/DSPARK-TRACK.md)) and the 4B scale rung
+   ([`docs/SCALING-PROTOCOL.md`](docs/SCALING-PROTOCOL.md)).
+
 ## Start here
 
 1. [`docs/WHITEPAPER.md`](docs/WHITEPAPER.md) — the full dense-forensics write-up.
 2. [`docs/FORENSIC-ARCHIVE.md`](docs/FORENSIC-ARCHIVE.md) — the settled Mirror-Descent question.
 3. [`docs/FAILURES.md`](docs/FAILURES.md) — every falsified route, with evidence and revisit cost.
-4. [`docs/MOE-EXTENSION.md`](docs/MOE-EXTENSION.md) — the extension to Mixture-of-Experts models (does the recipe survive routing?): routing-drift measurements, the correction-placement rule, the AUTOGRID noise-floor map, and the three routes to a ternary MoE. The harness is in [`moe/`](moe/README.md) with its result JSONs.
+4. **The MoE extension moved to its own repository:** [`sky-is-green/scion`](https://github.com/sky-is-green/scion) — harness, port decisions, serving experiments, release docs and its own negative register. Reference release: [`Scion-35B-A3B`](https://huggingface.co/SkyIsNotGreen/Scion-35B-A3B) (11.34 GB / 2.61 bpw). The write-up split with it (`scion/docs/MOE-EXTENSION.md`).
 
 The full documentation index is [`docs/README.md`](docs/README.md); the
 Gate-1/2/3 reports are in [`research/`](research/).
@@ -66,8 +91,6 @@ scripts/pilot/           block-wise KD and data-selection pilots; the DSpark
 scripts/eval_llama_server.py  standalone smoke / perplexity evaluation
 tests/ternary/           offline test suite (synthetic tensors; no downloads)
 docs/                    write-ups and decision records; start at docs/README.md
-moe/                     MoE ternary harness (routing probe, correction
-                         branches, STE branch formats) + result JSONs
 research/                Gate-1/2/3 write-ups
 configs/                 run configs, pinned model registry
 ```

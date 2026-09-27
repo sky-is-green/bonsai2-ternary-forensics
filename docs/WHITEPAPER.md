@@ -281,3 +281,21 @@ commit hashes cited throughout (`5eac0c0` T31, `cfea698` T30, `ea089e2` T27,
 
 See [`FAILURES.md`](FAILURES.md) for every entry's status and the cost to
 revisit.
+
+---
+
+## 10. Afterword — where this led (added 2026-09-27)
+
+The study above is the dense-27B forensics, and it stays here. The programme it
+started produced the **MoE extension** — in-place ternarisation of pretrained
+Mixture-of-Experts models plus trained residual-stream corrections (the
+placement rule), the deployable Lloyd quantizer, and the reference release
+**Scion-35B-A3B** (11.34 GB / 2.61 bpw, task-level Q4-class) — which now lives
+in its own repository, [sky-is-green/scion](https://github.com/sky-is-green/scion),
+together with its port decisions, the serving experiments (ternary vs f16
+offload cost, threads, split modes, the hot-expert cache no-gain) and its own
+negative register. The path currently open is the KLD tail beyond the teacher's
+top-50 (`scion/docs/TAIL-EXPERIMENT-PLAN.md`): the corrections bought mean token
+likelihood, not the full-distribution tail.
+
+None of this changes the findings, numbers, or falsifications reported above.

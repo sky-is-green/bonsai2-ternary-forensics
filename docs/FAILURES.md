@@ -479,3 +479,29 @@ Results:
   additionally confirmed against the [`oracle.py`](../bonsai_forensics/oracle.py) source.
 
 No other contradictions were found between the seeded entries and the reports.
+
+---
+
+## Downstream (MoE track) — register moved
+
+The MoE extension this programme produced (in-place ternary MoE + trained
+corrections → the reference release Scion-35B-A3B) carries its own negative
+register, created at the split (2026-09-27):
+**[scion/FAILURES.md](https://github.com/sky-is-green/scion/blob/main/FAILURES.md)**.
+
+Its entries, one line each (D1–D8):
+
+- **D1** rotation before RTN does not help MoE (40,121× raw vs 56,611× rotated);
+- **D2** in-place QAT at local budgets recovers ~1.9× with routing unchanged;
+- **D3** per-expert corrections are 25× worse than residual-stream corrections
+  (the placement rule);
+- **D4** router-KD is a verified no-op (~1.5% of a zero-weight control);
+- **D5** post-hoc ternarisation of the correction sidecar is 14–25× worse than
+  STE-trained;
+- **D6** MoTE-style up-cycling does not transfer to the target (its shared
+  expert is ~0.4% of weights);
+- **D7** the hot-expert GPU cache is performance-neutral (`mul_mat_id` computes
+  k experts regardless of weights);
+- **D8** the KLD tail beyond the teacher's top-50 is the open path.
+
+Nothing here supersedes or rewrites the entries above (policy: append-only).

@@ -12,12 +12,15 @@ reproduction commands.
 | [FORENSIC-ARCHIVE.md](FORENSIC-ARCHIVE.md) | The settled Mirror-Descent question: what Bonsai 2's recipe is, and is not |
 | [FAILURES.md](FAILURES.md) | Failure register: every falsified route, with evidence and revisit cost |
 
-## Mixture-of-Experts extension
+## Mixture-of-Experts extension → moved
 
-| document | what it is |
-|---|---|
-| [MOE-EXTENSION.md](MOE-EXTENSION.md) | Ternary on a pretrained MoE: routing drift, the correction-placement rule, the AUTOGRID noise-floor map, and the three routes to a ternary MoE |
-| [../moe/README.md](../moe/README.md) | The harness: router-drift probe, correction-branch trainers, STE branch formats, and the result JSONs |
+The MoE track now lives in its own repository: **`sky-is-green/scion`** —
+reference release [`Scion-35B-A3B`](https://huggingface.co/SkyIsNotGreen/Scion-35B-A3B)
+(11.34 GB / 2.61 bpw). Start at its
+[README](https://github.com/sky-is-green/scion) and
+[docs index](https://github.com/sky-is-green/scion/tree/main/docs); the MoE
+write-up (`MOE-EXTENSION.md`), the port decisions, the serving experiments and
+the track's negative register moved with it.
 
 ## Format, quantizer, and gates
 
@@ -40,7 +43,7 @@ reproduction commands.
 | [SCALING-PROTOCOL.md](SCALING-PROTOCOL.md) | The scaling protocol, and why the ladder closed without the 4B rung |
 | [MODEL-REGISTRY.md](MODEL-REGISTRY.md) | Candidate ranking and cross-architecture pilot order |
 | [REPRODUCIBILITY-AUDIT.md](REPRODUCIBILITY-AUDIT.md) | Prioritized gaps, acceptance criteria, and the pilot protocol |
-| [QWEN35-PORT-DECISION.md](QWEN35-PORT-DECISION.md) | Qwen3.5/Qwen3.8 architecture port decision record |
+| [QWEN35-PORT-DECISION](https://github.com/sky-is-green/scion/blob/main/docs/QWEN35-PORT-DECISION.md) | Qwen3.5/Qwen3.8 (`qwen3_5_moe`) architecture port decision — moved to [scion](https://github.com/sky-is-green/scion) |
 | [RECIPE-LEDGER.md](RECIPE-LEDGER.md) | ~50 pilot runs categorised by lever, so they are not re-derived |
 
 ## Context
