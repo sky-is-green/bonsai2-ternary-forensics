@@ -40,8 +40,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from moe_proxy import ternary_absmean  # noqa: E402
 from olmoe_corrections import (CorrectionBranch, MoEWithCorrection,  # noqa: E402
-                               load_branch_state, quantize_bank_inplace,
-                               quick_eval)
+                               load_branch_state, moe_block,
+                               quantize_bank_inplace)
 from olmoe_proxy import gate_hook, ternary_ste, windows  # noqa: E402
 
 ART = Path(os.environ.get("MOE_ARTIFACTS", HERE / "artifacts"))
@@ -118,6 +118,42 @@ def text_layers(model):
     if hasattr(root, "layers"):
         return root.layers
     return root.model.language_model.layers
+
+
+def model_logits(model, ids):
+    """Logits for the conditional wrapper (.logits) or the bare text prefix."""
+    out = model(input_ids=ids, use_cache=False)
+    logits = getattr(out, "logits", None)
+    if logits is None:
+        logits = model.lm_head(out.last_hidden_state)
+    return logits
+
+
+@torch.no_grad()
+def quick_eval(model, data, args, ref=None):
+    """In-run eval (qwen35-aware: text prefix or full conditional wrapper)."""
+    model.eval()
+    total, ntok, agree = 0.0, 0, []
+    layers = text_layers(model)
+    for i in range(len(data)):
+        ids = data[i:i + 1].to(args.device)
+        store = {}
+        hs = [moe_block(layer).gate.register_forward_hook(gate_hook(store, j))
+              for j, layer in enumerate(layers)]
+        logits = model_logits(model, ids)
+        for h in hs:
+            h.remove()
+        total += F.cross_entropy(logits[:, :-1].reshape(-1, logits.shape[-1]).float(),
+                                 ids[:, 1:].reshape(-1), reduction="sum").item()
+        ntok += ids[:, 1:].numel()
+        if ref is not None:
+            for j in store:
+                a = ref[i][j].to(store[j][2].device)
+                b = store[j][2]
+                agree.append(float((a.unsqueeze(-1) == b.unsqueeze(-2)).any(-1).float().mean()))
+    model.train()
+    ppl = math.exp(total / ntok)
+    return ppl, (sum(agree) / len(agree) if agree else None)
 
 
 # ---------------------------------------------------------------- prefix -----
@@ -257,7 +293,7 @@ def stage_cache(args):
         store = {}
         handles = [layer.mlp.gate.register_forward_hook(gate_hook(store, i))
                    for i, layer in enumerate(text_layers(model))]
-        logits = model(ids).logits
+        logits = model_logits(model, ids)
         for h in handles:
             h.remove()
         t_top = logits[:, :-1].topk(args.top_logits, dim=-1)
@@ -300,6 +336,10 @@ def build_ref(args):
 def load_full(args):
     from transformers import AutoModelForImageTextToText, AutoTokenizer
     tok = AutoTokenizer.from_pretrained(MODEL)
+    if getattr(args, "prefix_layers", 0):
+        # local dry runs: an N-layer prefix loads from the shards on disk
+        model, _, _, _ = load_prefix(args.prefix_layers, args.device, model_dir=MODEL)
+        return model, tok
     mm = None
     if args.max_memory:
         mm = {int(k): v for k, v in (part.split(":") for part in args.max_memory.split(","))}
@@ -367,7 +407,7 @@ def stage_train(args):
     for epoch in range(args.epochs):
         for rec in cache:
             ids = data[step % len(data):step % len(data) + 1].to(args.device)
-            logits = model(ids).logits
+            logits = model_logits(model, ids)
             lm = F.cross_entropy(logits[:, :-1].reshape(-1, logits.shape[-1]).float(),
                                  ids[:, 1:].reshape(-1))
             ti = rec["idx"].to(logits.device)
@@ -431,7 +471,22 @@ def stage_eval(args):
     hidden = getattr(model.config, "hidden_size", None) or model.config.text_config.hidden_size
     for layer in layers:
         dev = next(layer.mlp.parameters()).device
-        layer.mlp = MoEWithCorrection(layer.mlp, hidden, args.rank, args.branch_quant).to(dev)
+        if args.branch_target in ("moe_out", "both"):
+            layer.mlp = MoEWithCorrection(layer.mlp, hidden, args.rank,
+                                          args.branch_quant, args.quant).to(dev)
+        if args.branch_target in ("attn_out", "both"):
+            # same placement map as the train stage: GDN -> linear_attn.out_proj
+            # (ssm_out in GGUF), full attention -> self_attn.o_proj (attn_output)
+            if getattr(layer, "layer_type", "") == "linear_attention":
+                proj = layer.linear_attn.out_proj
+                layer.linear_attn.out_proj = MoEWithCorrection(
+                    proj, proj.in_features, args.rank, args.branch_quant, args.quant,
+                    out_dim=proj.out_features).to(dev)
+            else:
+                proj = layer.self_attn.o_proj
+                layer.self_attn.o_proj = MoEWithCorrection(
+                    proj, proj.in_features, args.rank, args.branch_quant, args.quant,
+                    out_dim=proj.out_features).to(dev)
     if args.load:
         missing, unexpected = load_branch_state(model, args.load)
         print(f"loaded {args.load}: missing={len(missing)} unexpected={len(unexpected)}",
@@ -441,7 +496,7 @@ def stage_eval(args):
     total, ntok = 0.0, 0
     for i in range(len(data)):
         ids = data[i:i + 1].to(args.device)
-        logits = model(ids).logits
+        logits = model_logits(model, ids)
         total += F.cross_entropy(logits[:, :-1].reshape(-1, logits.shape[-1]).float(),
                                  ids[:, 1:].reshape(-1), reduction="sum").item()
         ntok += ids[:, 1:].numel()
@@ -455,11 +510,13 @@ def stage_eval(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("stage", choices=["smoke", "cache", "train", "eval"])
+    ap.add_argument("stage", choices=["smoke", "cache", "ref", "train", "eval"])
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--device-map", default="cuda:0")
     ap.add_argument("--max-memory", default="", help="e.g. '0:39GiB,1:39GiB'")
     ap.add_argument("--layers", type=int, default=4, help="smoke prefix depth")
+    ap.add_argument("--prefix-layers", type=int, default=0,
+                    help="run the full stages on an N-layer prefix (local dry runs only)")
     ap.add_argument("--group", type=int, default=128)
     ap.add_argument("--quant", choices=["absmean", "lloyd"], default="lloyd",
                     help="per-group scale rule for the frozen banks (lloyd = deployable)")
