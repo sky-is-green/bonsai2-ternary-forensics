@@ -1,10 +1,8 @@
 """Materialise the ternary qwen3.5-MoE prefix to an HF dir for AUTOGRID scans.
 
-Streams tensors from the local shards straight into a bf16 model (no state-dict
-double copy — the first version needed ~2x model size in host RAM and OOM'd the
-machine when run alongside training), quantises the fused expert banks with the
-deployable Lloyd g128 rule, and saves a standard safetensors checkpoint plus
-tokenizer.
+Streams tensors from the local shards straight into a bf16 model (about one
+model copy of host RAM), quantises the fused expert banks with the deployable
+Lloyd g128 rule, and saves a standard safetensors checkpoint plus tokenizer.
 
 Run it alone (no training concurrently) and under a memory cap:
   systemd-run --user --scope -p MemoryMax=14G ...
