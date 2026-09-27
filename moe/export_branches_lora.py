@@ -36,6 +36,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -152,6 +153,11 @@ def main():
     ap.add_argument("--base-model", default="",
                     help="HF dir (safetensors) holding the frozen-body routers the "
                          "checkpoint was trained against")
+    ap.add_argument("--recipe", default="",
+                    help="free-text provenance written into adapter.recipe")
+    ap.add_argument("--eval-json", default="",
+                    help="optional eval JSON (branches-eval format) to embed as "
+                         "adapter.eval.* provenance")
     args = ap.parse_args()
 
     if args.routers and not args.base_model:
@@ -193,6 +199,20 @@ def main():
     w.add_type("adapter")
     w.add_string("adapter.type", "taardis-lora" if args.taardis else "lora")
     w.add_float32("adapter.lora.alpha", 0.0)
+    # provenance (zero-risk): what was trained, from what, and how it scored
+    w.add_string("adapter.recipe", args.recipe)
+    w.add_string("adapter.base", args.base_model or "unknown")
+    if args.eval_json:
+        try:
+            ev = json.load(open(args.eval_json))
+            tr = ev.get("trained_branches", ev)   # harness format or stage_eval format
+            if "ppl" in tr:
+                w.add_float32("adapter.eval.ppl", float(tr["ppl"]))
+            if "router_agree" in tr:
+                w.add_float32("adapter.eval.router_agree", float(tr["router_agree"]))
+            w.add_string("adapter.eval.protocol", "8-window wikitext-2, c512")
+        except Exception as e:  # provenance must never break the export
+            print(f"warning: could not read eval json: {e}")
 
     raw_qtype = None
     if args.dtype == "q1_0_g128":
