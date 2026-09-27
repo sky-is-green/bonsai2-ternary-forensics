@@ -66,6 +66,25 @@ harness:
    one 80 GB card, order 1-2 h; correction training 8-10k steps on the same
    card, order 8-12 h.  No fp32-master QAT of the body is needed.
 
+## Harness status (2026-09-27)
+
+The OLMoE recipe is now ported into `qwen35_moe_proxy.py`:
+
+- `--quant {absmean,lloyd}` (default `lloyd`, the deployable rule);
+- `--branch-target {moe_out,attn_out,both}` (default `both`); `attn_out`
+  wraps `linear_attn.out_proj` on GDN layers (`ssm_out` in GGUF) and
+  `self_attn.o_proj` on full-attention layers (`attn_output`);
+- the validated schedule: `--kd-weight 1.0`, `--temp 2.0`,
+  `--lr-half-every 500 --lr-decay-start 2000`, Adafactor;
+- `ref` stage + `--ref-file` (teacher-free training: on an 80 GB card the FP
+  teacher and the 35B student cannot be resident together);
+- `--cache-file`, `--corpus-chars`, `--eval-every` with router agreement;
+- `export_branches_lora.py` maps the qwen35moe keys (`ssm_out` /
+  `attn_output` / `ffn_moe_out`) and writes the compact q1_0_g128 adapter.
+
+Rental run order: `cache` (FP teacher resident, ~1-2 h) -> `ref` (same
+session) -> free teacher -> `train` (student only) -> `eval` -> export.
+
 ## Smoke-test plan (before renting)
 
 - `scripts/pilot/inspect_model_targets.py` on the real config — **green**.

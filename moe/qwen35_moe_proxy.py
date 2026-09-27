@@ -40,7 +40,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from moe_proxy import ternary_absmean  # noqa: E402
 from olmoe_corrections import (CorrectionBranch, MoEWithCorrection,  # noqa: E402
-                               load_branch_state, quantize_bank_inplace)
+                               load_branch_state, quantize_bank_inplace,
+                               quick_eval)
 from olmoe_proxy import gate_hook, ternary_ste, windows  # noqa: E402
 
 ART = Path(os.environ.get("MOE_ARTIFACTS", HERE / "artifacts"))
@@ -249,7 +250,7 @@ def smoke(args):
 @torch.no_grad()
 def stage_cache(args):
     model, tok = load_full(args)
-    data = windows(tok, args.windows, args.seq, args.seed)
+    data = windows(tok, args.windows, args.seq, args.seed, max_chars=args.corpus_chars)
     recs = []
     for w in range(len(data)):
         ids = data[w:w + 1].to(args.device)
@@ -268,8 +269,30 @@ def stage_cache(args):
         if w % 100 == 0:
             print(f"cached {w}/{len(data)}", flush=True)
     OUT.mkdir(parents=True, exist_ok=True)
-    torch.save(recs, CACHE)
-    print(f"wrote {CACHE} ({CACHE.stat().st_size/1e9:.2f} GB)", flush=True)
+    path = Path(args.cache_file) if args.cache_file else CACHE
+    torch.save(recs, path)
+    print(f"wrote {path} ({path.stat().st_size/1e9:.2f} GB)", flush=True)
+
+
+@torch.no_grad()
+def build_ref(args):
+    """Precompute teacher router refs for the in-run eval windows."""
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(MODEL)
+    data = windows(tok, 2, args.seq, 999, "wikitext")
+    model, _ = load_full(args)
+    ref = {}
+    for i in range(len(data)):
+        ids = data[i:i + 1].to(args.device)
+        store = {}
+        hs = [layer.mlp.gate.register_forward_hook(gate_hook(store, j))
+              for j, layer in enumerate(text_layers(model))]
+        model(ids)
+        for h in hs:
+            h.remove()
+        ref[i] = {j: store[j][2].cpu() for j in store}
+    torch.save(ref, args.ref_file)
+    print(f"wrote {args.ref_file} ({len(ref)} windows)", flush=True)
 
 
 # ------------------------------------------------------------------- train ---
@@ -291,22 +314,54 @@ def stage_train(args):
     layers = text_layers(model)
     with torch.no_grad():
         for layer in layers:
-            quantize_bank_inplace(layer.mlp.experts.gate_up_proj, args.group)
-            quantize_bank_inplace(layer.mlp.experts.down_proj, args.group)
+            quantize_bank_inplace(layer.mlp.experts.gate_up_proj, args.group, kind=args.quant)
+            quantize_bank_inplace(layer.mlp.experts.down_proj, args.group, kind=args.quant)
             layer.mlp.experts._ternary = False          # banks already quantised
     hidden = getattr(model.config, "hidden_size", None) or model.config.text_config.hidden_size
+    target = args.branch_target
     for layer in layers:
         dev = next(layer.mlp.parameters()).device
-        layer.mlp = MoEWithCorrection(layer.mlp, hidden, args.rank, args.branch_quant).to(dev)
+        if target in ("moe_out", "both"):
+            layer.mlp = MoEWithCorrection(layer.mlp, hidden, args.rank,
+                                          args.branch_quant, args.quant).to(dev)
+        if target in ("attn_out", "both"):
+            # GDN layers project through linear_attn.out_proj (ssm_out in GGUF);
+            # full-attention layers through self_attn.o_proj (attn_output).
+            # Both map value_dim (4096) -> hidden (2048), so the branch needs
+            # separate in/out dims.
+            if getattr(layer, "layer_type", "") == "linear_attention":
+                proj = layer.linear_attn.out_proj
+                layer.linear_attn.out_proj = MoEWithCorrection(
+                    proj, proj.in_features, args.rank, args.branch_quant, args.quant,
+                    out_dim=proj.out_features).to(dev)
+            else:
+                proj = layer.self_attn.o_proj
+                layer.self_attn.o_proj = MoEWithCorrection(
+                    proj, proj.in_features, args.rank, args.branch_quant, args.quant,
+                    out_dim=proj.out_features).to(dev)
     for name, p in model.named_parameters():
-        p.requires_grad_((".branch." in name) or (".mlp.gate." in name))
+        p.requires_grad_((".branch." in name) or (".gate." in name))
     n_tr = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"trainable {n_tr/1e6:.2f}M (branches + routers)", flush=True)
+    print(f"trainable {n_tr/1e6:.2f}M (branches + routers) target {target}", flush=True)
 
-    cache = torch.load(CACHE, map_location="cpu")
-    data = windows(tok, args.windows, args.seq, args.seed)
-    opt = torch.optim.Adafactor([p for p in model.parameters() if p.requires_grad],
-                                lr=args.lr, weight_decay=0.0)
+    cache_path = Path(args.cache_file) if args.cache_file else CACHE
+    cache = torch.load(cache_path, map_location="cpu")
+    data = windows(tok, args.windows, args.seq, args.seed, max_chars=args.corpus_chars)
+
+    ref = None
+    ev = None
+    if args.eval_every:
+        if not args.ref_file:
+            raise SystemExit("--eval-every needs --ref-file (build with the 'ref' stage)")
+        ev = windows(tok, 2, args.seq, 999, "wikitext")
+        ref = torch.load(args.ref_file, map_location="cpu")
+        print(f"loaded eval refs from {args.ref_file}", flush=True)
+
+    params = [p for p in model.parameters() if p.requires_grad]
+    if args.optimizer == "adamw":
+        opt = torch.optim.AdamW(params, lr=args.lr, weight_decay=0.0)
+    else:
+        opt = torch.optim.Adafactor(params, lr=args.lr, weight_decay=0.0)
     model.train()
     step = 0
     for epoch in range(args.epochs):
@@ -326,8 +381,18 @@ def stage_train(args):
             opt.step()
             opt.zero_grad(set_to_none=True)
             step += 1
+            if (args.lr_half_every and step >= args.lr_decay_start
+                    and step % args.lr_half_every == 0):
+                for g in opt.param_groups:
+                    g["lr"] *= 0.5
+                print(f"step {step}: lr -> {opt.param_groups[0]['lr']:.3e}", flush=True)
             if step % args.log_every == 0:
-                print(f"step {step} lm {lm.item():.4f} kd {kd.item():.4f}", flush=True)
+                print(f"step {step} lm {lm.item():.4f} kd {kd.item():.4f} "
+                      f"total {loss.item():.4f}", flush=True)
+            if args.eval_every and step % args.eval_every == 0 and ev is not None:
+                ppl, ag = quick_eval(model, ev, args, ref)
+                print(f"  [eval] step {step} ppl {ppl:.2f} router_agree {ag:.4f}",
+                      flush=True)
             if args.ckpt_every and step % args.ckpt_every == 0:
                 save(model, args, step)
             if args.steps and step >= args.steps:
@@ -340,7 +405,7 @@ def stage_train(args):
 
 def save(model, args, step):
     sd = {k: v for k, v in model.state_dict().items()
-          if ".branch." in k or ".mlp.gate." in k}
+          if ".branch." in k or ".gate." in k}
     tag = "" if args.branch_quant == "fp32" else f"-{args.branch_quant}"
     p = OUT / f"qwen35-corr-r{args.rank}{tag}-step{step}.pt"
     torch.save(sd, p)
@@ -360,8 +425,8 @@ def stage_eval(args):
     layers = text_layers(model)
     with torch.no_grad():
         for layer in layers:
-            quantize_bank_inplace(layer.mlp.experts.gate_up_proj, args.group)
-            quantize_bank_inplace(layer.mlp.experts.down_proj, args.group)
+            quantize_bank_inplace(layer.mlp.experts.gate_up_proj, args.group, kind=args.quant)
+            quantize_bank_inplace(layer.mlp.experts.down_proj, args.group, kind=args.quant)
             layer.mlp.experts._ternary = False
     hidden = getattr(model.config, "hidden_size", None) or model.config.text_config.hidden_size
     for layer in layers:
@@ -396,9 +461,15 @@ def main():
     ap.add_argument("--max-memory", default="", help="e.g. '0:39GiB,1:39GiB'")
     ap.add_argument("--layers", type=int, default=4, help="smoke prefix depth")
     ap.add_argument("--group", type=int, default=128)
+    ap.add_argument("--quant", choices=["absmean", "lloyd"], default="lloyd",
+                    help="per-group scale rule for the frozen banks (lloyd = deployable)")
     ap.add_argument("--rank", type=int, default=512)
     ap.add_argument("--branch-quant", choices=["fp32", "g128", "rank"], default="fp32")
+    ap.add_argument("--branch-target", choices=["moe_out", "attn_out", "both"], default="both",
+                    help="moe_out (block output), attn_out (ssm_out/o_proj), or both")
     ap.add_argument("--windows", type=int, default=4096)
+    ap.add_argument("--corpus-chars", type=int, default=50_000_000)
+    ap.add_argument("--cache-file", default="")
     ap.add_argument("--eval-windows", type=int, default=8)
     ap.add_argument("--seq", type=int, default=512)
     ap.add_argument("--seed", type=int, default=0)
@@ -406,8 +477,15 @@ def main():
     ap.add_argument("--steps", type=int, default=0)
     ap.add_argument("--epochs", type=int, default=1)
     ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--lr-half-every", type=int, default=0)
+    ap.add_argument("--lr-decay-start", type=int, default=0)
+    ap.add_argument("--optimizer", choices=["adafactor", "adamw"], default="adafactor")
     ap.add_argument("--temp", type=float, default=2.0)
-    ap.add_argument("--kd-weight", type=float, default=0.5)
+    ap.add_argument("--kd-weight", type=float, default=1.0)
+    ap.add_argument("--eval-every", type=int, default=0)
+    ap.add_argument("--ref-file", default="",
+                    help="precomputed teacher router refs for the in-run eval "
+                         "(build with the 'ref' stage); avoids teacher residency")
     ap.add_argument("--log-every", type=int, default=50)
     ap.add_argument("--ckpt-every", type=int, default=500)
     ap.add_argument("--load", default="")
@@ -416,6 +494,8 @@ def main():
         smoke(args)
     elif args.stage == "cache":
         stage_cache(args)
+    elif args.stage == "ref":
+        build_ref(args)
     elif args.stage == "train":
         stage_train(args)
     else:

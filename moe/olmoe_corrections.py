@@ -64,10 +64,10 @@ class CorrectionBranch(nn.Module):
     """
 
     def __init__(self, hidden: int, rank: int, quant: str = "fp32",
-                 quant_kind: str = "absmean"):
+                 quant_kind: str = "absmean", out_dim: int | None = None):
         super().__init__()
         self.down = nn.Linear(hidden, rank, bias=False)
-        self.up = nn.Linear(rank, hidden, bias=False)
+        self.up = nn.Linear(rank, out_dim or hidden, bias=False)
         self.quant = quant
         self.quant_kind = quant_kind
         nn.init.normal_(self.down.weight, std=0.02)
@@ -100,10 +100,10 @@ class CorrectionBranch(nn.Module):
 
 class MoEWithCorrection(nn.Module):
     def __init__(self, mlp: nn.Module, hidden: int, rank: int, quant: str = "fp32",
-                 quant_kind: str = "absmean"):
+                 quant_kind: str = "absmean", out_dim: int | None = None):
         super().__init__()
         self.mlp = mlp
-        self.branch = CorrectionBranch(hidden, rank, quant, quant_kind)
+        self.branch = CorrectionBranch(hidden, rank, quant, quant_kind, out_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.mlp(x) + self.branch(x)

@@ -144,9 +144,10 @@ def main():
 
     if args.routers and not args.base_model:
         raise SystemExit("--routers needs --base-model")
-    wanted = {"attn_out": {"attn_output.weight"},
+    wanted = {"attn_out": {"attn_output.weight", "ssm_out.weight"},
               "moe_out": {"ffn_moe_out.weight"},
-              "both": {"attn_output.weight", "ffn_moe_out.weight"}}[args.target]
+              "both": {"attn_output.weight", "ssm_out.weight",
+                       "ffn_moe_out.weight"}}[args.target]
 
     sd = torch.load(args.load, map_location="cpu")
     sd = {k.replace(".doctor.", ".branch."): v for k, v in sd.items()}
@@ -156,6 +157,11 @@ def main():
             target, which = "attn_output.weight", "down"
         elif key.endswith(".self_attn.o_proj.branch.up.weight"):
             target, which = "attn_output.weight", "up"
+        elif key.endswith(".linear_attn.out_proj.branch.down.weight"):
+            # qwen3_5_moe GDN layers project through ssm_out in GGUF
+            target, which = "ssm_out.weight", "down"
+        elif key.endswith(".linear_attn.out_proj.branch.up.weight"):
+            target, which = "ssm_out.weight", "up"
         elif key.endswith(".mlp.branch.down.weight"):
             target, which = "ffn_moe_out.weight", "down"
         elif key.endswith(".mlp.branch.up.weight"):
