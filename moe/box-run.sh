@@ -15,7 +15,19 @@
 # so `python` and `pip` refer to the same interpreter as the CUDA torch.
 set -euo pipefail
 
+# RunPod PyTorch images: the system python is externally managed (PEP 668) and
+# the CUDA toolkit is not on PATH; make the plain `pip install` calls below work.
+export PIP_BREAK_SYSTEM_PACKAGES="${PIP_BREAK_SYSTEM_PACKAGES:-1}"
+for cuda_dir in /usr/local/cuda-12.8 /usr/local/cuda; do
+    if [ -d "$cuda_dir" ]; then
+        export PATH="$cuda_dir/bin:$PATH"
+        export CUDA_HOME="${CUDA_HOME:-$cuda_dir}"
+        break
+    fi
+done
+
 # less fragmentation on the 80 GB card (~67 GiB weights + optimiser + acts)
+export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-expandable_segments:True}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 export MOE_ARTIFACTS="${MOE_ARTIFACTS:-/workspace/artifacts}"
 REPO="${REPO:-/workspace/bonsai2-ternary-forensics}"
@@ -41,8 +53,16 @@ setup)
                 "tokenizers==0.22.2" "numpy==2.5.2"
     # fast GDN path: without these the 30 linear-attention layers use the slow
     # torch fallback. If the install fails, training still works (slower).
-    pip install causal-conv1d flash-linear-attention || \
+    # causal-conv1d has no wheel for torch 2.9/cu128 — build it from source with
+    # the image's nvcc (now on PATH); no build isolation so it links against the
+    # installed torch instead of downloading another one.
+    pip install ninja setuptools wheel
+    pip install --no-build-isolation causal-conv1d flash-linear-attention || \
         echo "WARN: fast-path install failed — expect the torch fallback"
+    # Hopper GDN kernels: fla's gated chunk_bwd_dqkwg refuses triton 3.4-3.7.0
+    # (fla issue #640) and triton 3.7.1 fails to launch kernels when the 80 GB
+    # card is nearly full (the 35B student peaks at ~80.6 GiB); 3.8.0 validated.
+    pip install "triton==3.8.0" || echo "WARN: triton pin failed"
 
     [ -d "$REPO" ] || git clone https://github.com/sky-is-green/bonsai2-ternary-forensics "$REPO"
     [ -d "$REPO/taardis-llama.cpp" ] || git clone -b q1_0_g128-port \
@@ -56,7 +76,7 @@ setup)
 smoke)
     cd "$REPO"
     python moe/qwen35_moe_proxy.py smoke --layers 4 --device cuda:0
-    echo "check: hidden drift ~0.31, router top-8 agreement ~0.83, and NO"
+    echo "check: hidden drift ~0.3-0.45 (depends on which tensors the local load finds), router top-8 agreement ~0.83, and NO"
     echo "'fast path is not available' warning (install fla+causal_conv1d if you see it)"
     ;;
 cache)
