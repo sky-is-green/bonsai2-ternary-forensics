@@ -25,6 +25,7 @@ Two targets:
 | `olmoe_experts.py` | per-expert correction branches (placement control) |
 | `eval_ckpts.py` | checkpoint trajectory + router diagnostics |
 | `save_ternary_olmoe.py` | materialise a ternary build to an HF dir |
+| `save_ternary_qwen35_prefix.py` | materialise the 35B prefix ternary build (streaming, low-RAM) for AUTOGRID |
 | `qwen35_moe_proxy.py` | 35B-A3B (`qwen3_5_moe`) port: fused-bank STE patch, prefix smoke, cache/train/eval stages |
 | `branch_sensitivity.py` | per-layer sidecar sensitivity scan (which layers a mixed sidecar should keep fp16) |
 | `export_branches_lora.py` | pack a branch checkpoint as a llama.cpp LoRA adapter GGUF |
@@ -116,8 +117,15 @@ one) needs a runtime op and is not expressible as a LoRA.
   brief teacher/student coexistence (`device_map auto` with the `max_memory`
   caps in the script); single-card stages (cache, eval) should pin the free
   card, not the display card.
+- **Never overlap a heavy CPU job with training.** The host has 30 GB RAM and
+  a training scope peaks near 23 GB (page cache included); materialisation or
+  conversion jobs must run serially, under their own memory cap (e.g. 14 G),
+  and use streaming loads (see `save_ternary_qwen35_prefix.py` — the first
+  version's state-dict double copy OOM'd the host).
 - Run heavy jobs under `systemd-run --user --scope -p MemoryMax=..`; kill by
-  PID, never by pattern.
+  PID, never by pattern.  For runs that must survive a session restart, use
+  `systemd-run --user --unit=NAME --wait` (transient service) instead of a
+  scope.
 - Corrections and masters must be fp32: bf16 masters swallow adapter-scale
   updates (bulk update RMS ~5e-6 vs bf16 ULP ~6e-5).
 - With `device_map="auto"` the pre-patch experts `forward` is bound onto each
