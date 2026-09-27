@@ -30,6 +30,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -404,6 +405,12 @@ def stage_train(args):
         opt = torch.optim.Adafactor(params, lr=args.lr, weight_decay=0.0)
     model.train()
     step = 0
+    if args.resume:
+        missing, unexpected = load_branch_state(model, args.resume)
+        m = re.search(r"step(\d+)", args.resume)
+        step = int(m.group(1)) if m else 0
+        print(f"resumed {args.resume} at step {step}: missing={len(missing)} unexpected={len(unexpected)}",
+              flush=True)
     for epoch in range(args.epochs):
         for rec in cache:
             ids = data[step % len(data):step % len(data) + 1].to(args.device)
@@ -546,6 +553,8 @@ def main():
     ap.add_argument("--log-every", type=int, default=50)
     ap.add_argument("--ckpt-every", type=int, default=500)
     ap.add_argument("--load", default="")
+    ap.add_argument("--resume", default="",
+                    help="resume training from a branch checkpoint (step number from the filename)")
     args = ap.parse_args()
     if args.stage == "smoke":
         smoke(args)
