@@ -1,0 +1,101 @@
+\section{The residual is trained weight movement}
+\label{sec:mechanism}
+
+If the missing $8\%$ of codes were an error-compensation trick, then a method
+that compensates error should recover them. We test that hypothesis with real
+activation statistics in the recovered basis, and it fails in a consistent
+direction.
+
+\paragraph{Experiment 1: stochastic calibration.}
+A dithering or noise-resonance explanation would predict that calibration
+noise between two Hessian estimates moves the assignment \emph{toward} the
+released codes. On the 1.7B model we capture GPTQ Hessians on clean versus
+$5\%$ random-token-noise calibration data, quantize with group size $128$ and
+damping $0.1$, and compare with the released 1.7B ternary codes (decoded
+byte-exactly against the release's own dequantization). Noise moves $4.28\%$
+of the codes and changes agreement by $+0.003$ percentage points
+(Table~\ref{tab:scr}): no effect. The released codes are not a stochastic
+artefact.
+
+\begin{table}[t]
+\caption{Stochastic calibration on the 1.7B model: noise moves codes but not
+agreement.}
+\label{tab:scr}
+\begin{center}
+\begin{tabular}{lc}
+\toprule
+variant & agreement \\
+\midrule
+RTN absmean & $0.61196$ \\
+GPTQ clean Hessians & $0.61771$ \\
+GPTQ $5\%$ noise Hessians & $0.61774$ \\
+codes moved by noise & $4.28\%$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+\paragraph{Experiment 2: error compensation in the correct basis.}
+On the 27B we load the embedding and layers $0$--$3$, capture real
+Hessians on corpus windows, adjust each weight to the recovered layout, rotate
+it with the released signs, and run the GPTQ family in that basis
+(Table~\ref{tab:gptq}). Every variant moves codes \emph{away} from the released
+assignment. Plain absmean RTN scores $0.9145$; GPTQ scores $0.8086$--$0.8497$
+depending on damping, act-order $0.8065$, a rotation-aware Hessian
+$R^{\top} H R$ $0.8086$, raw unrotated Hessians $0.7991$, and a group-scale
+search $0.8506$--$0.8625$. The trend is monotone in damping: suppressing
+compensation converges back toward RTN, which is what would happen if the
+released codes were simply not produced by compensating this base at all.
+
+\begin{table}[t]
+\caption{Error-compensated quantization against the released codes (layer-0
+aggregate, 27B prefix, real Hessians). Every compensator moves codes away from
+the release; RTN is the best fit.}
+\label{tab:gptq}
+\begin{center}
+\begin{tabular}{lc}
+\toprule
+variant & agreement with released trits \\
+\midrule
+RTN absmean & $\mathbf{0.9145}$ \\
+GPTQ, damp $0.01$ & $0.8086$ \\
+GPTQ, damp $0.1$ & $0.8395$ \\
+GPTQ, damp $0.3$ & $0.8497$ \\
+GPTQ, act-order & $0.8065$ \\
+GPTQ, rotation-aware $R^{\top} H R$ & $0.8086$ \\
+GPTQ, raw (unrotated) $H$ & $0.7991$ \\
+group scale search, diagonal-$H$ & $0.8625$ \\
+group scale search, block-$H$ & $0.8506$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+\paragraph{Experiment 3: whose codes fit the activations?}
+If the released codes were optimized for the same activation distribution, they
+should fit it \emph{better} than round-to-nearest. Compute per-group
+Hessian-weighted least-squares scales for both code sets, evaluated on the same
+Hessians: the released codes carry $1.072\times$ the error of RTN. They are not
+a better fit to our activation distribution; they are optimized for a different
+objective or a different distribution.
+
+\paragraph{Corroboration.}
+Four independent observations point the same way. The top $20\%$ of weights by
+magnitude agree at $100\%$---mismatches live in the threshold band, where
+training crosses decision boundaries. The F32/BF16 exemptions moved (norms by
+up to $0.07$; the recurrent projections decorrelated). The released assignment
+is about $10\%$ closer to the base in weight space than RTN, which is what
+training with quantization in the loop does. And the quality cost of the
+residual is total (Table~\ref{tab:gate2}).
+
+\paragraph{Conclusion.}
+The released codes cannot be reproduced by any quantizer we tested applied to
+the public base: the residual is weight movement from training. What the
+evidence does \emph{not} identify is the particular training method. Error
+compensation and other PTQ mechanics are excluded; beyond that, the data is
+consistent with any recipe that moves weights while quantized---QAT with a
+straight-through estimator, distillation, or their combination---and with the
+shape evidence of \S\ref{sec:recipe}, we consider rotation-in-the-loop
+QAT/KD the best-supported account rather than a proven one. Two operational
+consequences: the quantizer reverse-engineering track is closed, and a GPTQ
+run at 27B is not worth compute for parity.

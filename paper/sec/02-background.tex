@@ -1,0 +1,49 @@
+\section{Background and related work}
+\label{sec:background}
+
+\paragraph{Ternary and low-bit weight quantization.}
+Ternary weight networks~\citep{twn} and the 1.58-bit line
+\citep{bitnet158} show that weights in $\{-s, 0, +s\}$ can support useful
+language models when training accounts for the quantizer. In practice ternary
+storage costs about two bits per weight once group scales and packing are
+counted; ``1.58 bits'' is an entropy figure, not a storage width. Group-wise
+scales are the standard mechanism that lets a single global ternary alphabet
+adapt to per-group weight statistics.
+
+\paragraph{PTQ, error compensation, and rotations.}
+PTQ methods round a frozen model using calibration data; GPTQ~\citep{gptq}
+chooses codes by minimizing a layer-wise quadratic proxy with a Hessian and
+propagates the resulting error to later columns, and QuIP-style methods
+\citep{quip,quipsharp} precondition the problem with random or Hadamard
+rotations so that weights and Hessians are incoherent before rounding.
+Rotations have since become a standard component of low-bit inference stacks
+\citep{quarot,spinquant}. A practical pitfall of all of these methods is
+calibration: their error metrics and round decisions depend on the passages
+used for calibration, and it is not always verified that reported quality
+survives when the calibration set and the evaluation set are disjoint. Section
+\ref{sec:ptq} studies exactly that failure mode on a public baseline.
+
+\paragraph{QAT and distillation.}
+QAT keeps the quantizer in the forward pass and estimates gradients through it,
+typically with a straight-through estimator~\citep{ste}; distillation from a
+full-precision teacher~\citep{kd} is commonly combined with it. A training
+recipe built this way is not recoverable from the released weights by
+inspection; the best one can do forensically is test the mechanisms such a
+recipe would leave behind.
+
+\paragraph{The Bonsai 2 release and its ecosystem.}
+Bonsai 2 27B is a ternary release derived from Qwen3.8-27B, a hybrid-attention
+model with gated linear-attention layers interleaved with full attention
+\citep{qwen38,qwen3}. The release ships as GGUF and runs on a public
+ROCm/CUDA inference fork with a ternary runtime and speculative
+decoding~\citep{prismfork,llamacpp,gguf}. The authors separately publish the
+format ground truth in an MLX-oriented repository: a Hadamard manifest
+(block size, transform, axis, and explicit sign vectors) and the runtime codec
+for the packed format~\citep{prismbonsai2mlx}. The surrounding community has
+already closed several questions: format and interop are essentially settled,
+multiple third-party draft heads and repacks load with parity, and at least one
+post-hoc refinement improves the released model by a few percent
+perplexity~\citep{gsqrco,mtp,jang}. What the community has not done, at the
+time of writing, is retrain ternary weights, and a same-ruler comparison
+between trained ternary and PTQ at matched size is still open. This study
+contributes on the verification side of that gap.

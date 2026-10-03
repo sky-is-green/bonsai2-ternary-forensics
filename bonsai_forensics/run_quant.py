@@ -297,8 +297,8 @@ def _process_tensor(
             refine_iters=int(config["quant"]["refine_iters"]),
             device=config.get("device") if config.get("device") not in (None, "cpu") else None,
         )
-        codes = result.codes.numpy()
-        scales = result.scales.numpy()
+        codes = result.codes.detach().cpu().numpy()
+        scales = result.scales.detach().cpu().numpy()
     else:
         result = quant.quantize(rotated, group_size=group_size, refine_iters=int(config["quant"]["refine_iters"]))
         codes = result.codes

@@ -42,3 +42,11 @@ Thumbs.db
 .idea/
 *.swp
 *~
+
+# paper/ LaTeX build outputs (source is tracked; PDFs are regenerated)
+paper/*.aux
+paper/*.bbl
+paper/*.blg
+paper/*.out
+paper/*.pdf
+paper/*.zip

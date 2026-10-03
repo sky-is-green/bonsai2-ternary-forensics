@@ -1,0 +1,58 @@
+\section{Limitations and threats to validity}
+\label{sec:limitations}
+
+\paragraph{What the evidence covers.}
+This is a historical forensic write-up assembled from a research programme that
+has ended: the public artifact contains the scripts and reports, but not every
+referenced large artifact or private-history record, so some provenance
+identifiers are not reproducible from the public checkout. The numbers in the
+public reports are the authoritative record for every claim here. Nothing in
+this paper claims packed \texttt{PQ2\_0} parity for our own pipeline, a
+completed 27B QAT run, or an unbiased final test-set claim.
+
+\paragraph{Protocol size.}
+Quality numbers use one corpus ($\sim$1.1\,MB of Shakespeare), an $8\times512$
+context, one binary, and single runs per arm. Perplexity of a badly broken
+model is noisy ($\pm 1231$ on $23{,}606$), and the corrected 1.7B numbers are
+validation-selected points rather than pre-registered final results. The
+directions and effect sizes we rely on are far outside that noise, and the
+smoke arm is monotone in swap size, but absolute values should be read as
+controlled comparisons rather than benchmark-grade estimates. No KLD or
+downstream task evaluation is reported.
+
+\paragraph{Coverage of the agreement analysis.}
+Agreement was measured on $26$ tensors sampled from layers $0$, $3$, $62$, and
+$63$ of the 27B, and the Hessian experiments use a four-layer prefix; both
+choices trade coverage for feasibility, since the full model does not fit
+locally. The direction of the results is uniform across tensors and layer
+types, but a full-model sweep would strengthen the magnitudes.
+
+\paragraph{The 1.7B canary is not the 27B.}
+The pilot numbers describe a different model at a different scale and a
+different metric (perplexity ratio rather than benchmark retention). Their
+role is to price the remaining training route and to expose evaluation
+failures, not to stand in for a 27B result. The same applies to the PTQ study,
+which is instantiated at 1.7B: the calibration-collapse direction is what we
+claim, not exact ratios at 27B.
+
+\paragraph{Mechanism statements are bounded.}
+The experiments prove that some weight movement occurred during training; they
+do not identify the optimizer or prove that QAT/KD specifically produced the
+released weights. ``Rotation-in-the-loop QAT/KD'' is the best-supported
+account, not a demonstrated reproduction. The mirror-descent falsification is
+specific to the tested configurations in the deployed metric and does not
+falsify mirror descent as a family.
+
+\paragraph{Post-hoc verification.}
+The format recovery was performed before consulting the authors' published
+manifest; however, we did not pre-register the recovery, so the confirmation is
+post-hoc rather than a blind prediction. We report it as agreement, not as a
+prediction.
+
+\paragraph{Out of scope.}
+Mixture-of-experts ternarization, speculative-drafting behaviour, and the
+runtime engineering of the inference fork are out of scope; the drafter track
+in the artifact is recorded there as a shelved negative result. Runtime
+timings are descriptive only (the measured generation rate is below the target
+we had set for our own artifact) and should not be read as a runtime
+comparison.

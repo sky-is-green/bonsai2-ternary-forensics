@@ -1,0 +1,61 @@
+\section{The residual is the model: a byte-controlled payload swap}
+\label{sec:residual}
+
+Agreement says how many codes match; it does not say whether the matched codes
+are what make the model work. To make that question causal we swap the payloads
+in place.
+
+\paragraph{Method.}
+We copy the released GGUF and rewrite every mapped \texttt{PQ2\_0} payload:
+public-base tensor $\rightarrow$ converter layout (value-head tiling for
+\code{in\_proj\_qkv} and \code{in\_proj\_z}, \code{ssm\_out} grouped, embeddings
+plain) $\rightarrow$ rotation (Equation~\ref{eq:rotation}) $\rightarrow$
+absmean RTN with group size $128$ $\rightarrow$ packed \texttt{PQ2\_0}. Every
+other byte of the file stays identical, so tensor offsets, file size, metadata,
+tokenizer, and the F32/BF16 exemptions do not move. The pack/unpack round trip
+is byte-exact (verified on four tensors), and after patching, all $402$
+payloads re-read with valid SHA-256 hashes ($402/402$). Re-measured agreement
+after patching reproduces the recovery numbers of \S\ref{sec:format}
+($0.896$--$0.948$), confirming that the swap did what it claims.
+
+\paragraph{Result.}
+Table~\ref{tab:gate2} reports perplexity under the fixed protocol. Replacing
+all $402$ payloads explodes perplexity from $18.5851$ to $23{,}606$ in the same
+binary, corpus, and settings: a factor of $1{,}270$, even though the
+replacement codes still agree with the released ones on $90$--$95\%$ of
+weights. A smoke arm that patches only layers $0$ and $3$ ($13$ of $402$
+tensors) already costs $2.6\times$ on two chunks, localizing the blow-up to
+the recurrent path: small weight perturbations there amplify over the
+sequence, and the rest is the cumulative collapse of ternary PTQ documented
+independently at 1.7B (\S\ref{sec:ptq}).
+
+\begin{table}[t]
+\caption{Controlled payload swap. Same binary, corpus, settings; only the
+ternary payloads differ.}
+\label{tab:gate2}
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+model & PPL ($8\times512$) & notes \\
+\midrule
+released \texttt{PQ2\_0} & $18.5851 \pm 1.209$ & source artifact \\
+rotate $+$ absmean RTN payloads & $23{,}606.19 \pm 1231.6$ & $\mathbf{1{,}270\times}$ \\
+\ \ (smoke: layers $0{+}3$ only, 2 chunks) & $53.89$ vs $20.41$ & $2.6\times$ from $13/402$ tensors \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+\paragraph{Reading.}
+The rotation basis buys the container; the released assignment buys the
+quality. Trit agreement is not a quality proxy---a lesson that generalizes
+beyond this model---and the ``no-rental'' shortcut of filling the released
+container with PTQ weights of the public base is dead. The direction and
+magnitude of the effect sit far outside the noise of the protocol: perplexity
+of a broken model is noisy ($\pm 1231$ on $23{,}606$), but the smoke gradient
+is monotone in the number of swapped tensors, and the full swap is a
+$1{,}270\times$ effect.
+
+At this point two hypotheses remain for the residual: an error-compensated
+quantizer applied to the public base, or weights that moved during training.
+The next section separates them.

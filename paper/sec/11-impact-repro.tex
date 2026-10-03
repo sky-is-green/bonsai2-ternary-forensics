@@ -1,0 +1,54 @@
+\section{Broader impact}
+\label{sec:impact}
+
+Aggressive weight quantization lowers the compute and memory barriers to
+running capable language models, which is a broadly positive development; it
+also means that quality claims attached to low-bit releases can outrun what
+users can verify. Independent forensics is one part of keeping that ecosystem
+accountable: the ability to check, from public files, what a release actually
+contains, how much of its quality is in its weights, and whether a baseline
+survives off-calibration. Our findings are adversarial only in the scientific
+sense---we redistribute no weights and rely on public artifacts---and we see no
+direct negative societal impact specific to this study. The main risk we can
+name is the inverse of its value: code-agreement or calibration-passage metrics
+taken as quality guarantees. This paper documents two concrete ways that goes
+wrong.
+
+\section{Reproducibility and artifacts}
+\label{sec:repro}
+
+Every measurement in this paper is produced by scripts in the artifact, which
+is available as \coderef{}. The artifact contains: the spec for the recovered
+format with a canonical hash that is checked by the test suite
+(\texttt{SPEC\_SHA256}, \code{0d2c008b4a9e\ldots}); byte-exact decoders for the
+packed format; the rotation, layout, and agreement tooling; the controlled-swap
+patcher; the Hessian capture and GPTQ variants; the evaluation harness wrapper;
+offline tests that use synthetic tensors only (no downloads, CPU-only, CI
+green); and the full failure register. Large artifacts---model weights,
+calibration Hessians, evaluation outputs---are not redistributed; they are
+regenerable from the public base and release with the commands in the artifact.
+The evaluation protocol, hyperparameters, and the retraction timeline are
+documented in Appendix~\ref{app:protocols}. We also note what is \emph{not}
+reproducible: some provenance commit hashes refer to a private working history
+and are provided for the record only.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+We took apart a released ternary language model using only public files. The
+format and the rotation basis are exactly recoverable from the release and the
+public base; the last $8\%$ of codes are not, and they are the model: replacing
+them with rotate-and-round weights of the base collapses perplexity by
+$1{,}270\times$ in the same binary. Error-compensated quantization of the
+public base cannot produce the released codes---every variant we tried moved
+codes away, and the released codes fit real activation Hessians worse than
+plain round-to-nearest---so the residual is weight movement from training, with
+rotation-in-the-loop QAT/KD as the best-supported account and the mirror-map
+recipe falsified in the deployed metric. On the evaluation side, a widely cited
+public PTQ baseline reproduces its published $2.1\times$ only when calibration
+and evaluation share a passage; off-calibration it collapses by three to four
+orders of magnitude. We close the quantizer reverse-engineering track, retract
+our own earlier 1.7B retention number after a holdout leak, and record every
+falsified route so the next attempt starts from what was actually established:
+the gap is localized, priced, and reachable only through end-to-end training at
+scale.

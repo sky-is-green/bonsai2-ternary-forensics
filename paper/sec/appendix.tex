@@ -1,0 +1,78 @@
+\section{Failure register}
+\label{app:failures}
+
+The register is append-only; each entry records the claim, the method, the
+outcome, and the cost to re-assess. Table~\ref{tab:register} summarizes the
+load-bearing entries; the full register, including operational incidents
+(\code{U1}--\code{U3}), is in the artifact.
+
+\begin{table}[t]
+\caption{Failure register (condensed). ``Status'' reflects the state at the
+time of writing.}
+\label{tab:register}
+\begin{center}
+\begin{tabular}{p{0.05\linewidth}p{0.62\linewidth}p{0.25\linewidth}}
+\toprule
+id & one-line outcome & status \\
+\midrule
+F1 & Public PTQ collapses off-calibration; the published $2.1\times$ is a calibration-passage artifact; the public stack runs $1.2\times10^{3}$--$3.5\times10^{4}\times$ held-out. & falsified, closed \\
+F2 & GPTQ/Hessian variants move codes away from the released ones (RTN $0.9145$ vs $0.8086$--$0.8497$); quantizer reverse-engineering closed. & falsified, closed \\
+F3 & Stochastic calibration resonance: $4.3\%$ of codes move, agreement changes $+0.003$\,pp. & falsified, closed \\
+F4 & Rotate $+$ absmean RTN of the public base: $23{,}606$ vs $18.5851$ PPL ($1{,}270\times$). & falsified, closed \\
+F5 & The last $\sim$$8\%$ localized to end-to-end QAT; the 27B proof-run priced and deliberately not funded. & deferred by decision \\
+F6 & Student-stream block-wise distillation: $1.25$M PPL, worse than RTN. & dead end \\
+F7 & Teacher-forced block-wise distillation: $1.06$M PPL; per-layer distillation compounds globally. & dead end \\
+F8 & Entropy/excess-loss data selection lost to random ($172.3$ vs $115.9$ PPL). & falsified (pilot) \\
+F11 & The 1.7B pilot's $1.103\times$ was measured on training windows; clean multi-region holdout is $\sim$$2.09\times$ ($\sim$48\%); both earlier corrections retracted. & retracted; open \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+\section{Protocols and hyperparameters}
+\label{app:protocols}
+
+\paragraph{Decode and agreement.}
+Released payloads are decoded with the byte-exact \texttt{PQ2\_0} decoder
+(34\,B per 128 weights; FP16 group scale; 16 trits per 32-bit word). Agreement
+is Equation~\ref{eq:agreement}, computed after mapping each public-base tensor
+to the release's layout and applying the recovered rotation with the explicit
+sign vectors read from the file metadata. Reported values are per-tensor means
+over the sampled tensors.
+
+\paragraph{Controlled swap.}
+All $402$ mapped payloads are rewritten in place; the file's metadata,
+tokenizer, tensor table, offsets, and non-ternary tensors are untouched.
+Pack/unpack round-trips are byte-exact; post-patch SHA-256 verification covers
+all $402$ tensors. Evaluation uses the release's fork perplexity binary at
+$8\times512$ context on the fixed corpus, one process at a time, with the
+device pinned.
+
+\paragraph{Hessians and GPTQ variants.}
+Embedding plus layers $0$--$3$ are loaded alone ($55$ tensors), real corpus
+windows are run through them, and float32 Hessians are captured on the original
+norm outputs. Each weight is layout-adjusted and rotated with the explicit
+signs; GPTQ is run in that basis with damping
+$\{0.01, 0.1, 0.3\}$, act-order on/off, rotation-aware ($R^{\top} H R$) versus
+raw Hessians, and a group-scale search in diagonal-H and block-H forms.
+
+\paragraph{Stochastic calibration.}
+GPTQ with group size $128$ and damping $0.1$ on the 1.7B canary, with clean
+versus $5\%$ random-token-noise calibration Hessians, compared against the
+released 1.7B ternary codes (byte-exact decode).
+
+\paragraph{Canary pilot and holdout.}
+Qwen3-1.7B student and teacher, distillation temperature $2$, $512$-token
+windows. The clean holdout is eight disjoint regions of $32$k tokens with
+$8\times512$ evaluation windows per region; training windows are sampled
+outside the holdout, and the evaluation call uses the same sequence length as
+the holdout definition (the mismatch between the two is what contaminated the
+retracted corrections). Reported pilot numbers are the best checkpoints on the
+holdout, i.e.\ validation-selected, not final-test numbers.
+
+\paragraph{Retraction timeline.}
+(1) Reported $1.103\times$/$90.6\%$: training-window evaluation; retracted.
+(2) Corrected $1.219\times$/$82.0\%$: holdout/evaluation sequence-length
+mismatch; retracted. (3) Clean holdout: plain STE control $2.09\times$ mean;
+recipe ablations as reported in \S\ref{sec:pilot}. The register entry
+\code{F11} is kept open for a re-baseline rather than closed.

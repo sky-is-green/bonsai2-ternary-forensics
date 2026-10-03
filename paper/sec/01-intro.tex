@@ -1,0 +1,98 @@
+\section{Introduction}
+\label{sec:intro}
+
+Weight quantization is now the default way to make large language models
+deployable, and the field has settled into two regimes.\blfootnote{Generative
+AI tools were used in the preparation of this manuscript. All technical
+claims, numbers, and citations were verified by the author against the
+recorded reports and public sources, and the author takes full responsibility
+for the content.} Post-training
+quantization (PTQ) rounds a trained model using calibration statistics, with
+error-compensating variants such as GPTQ~\citep{gptq} and rotation-based
+preprocessing such as QuIP~\citep{quip}, QuIP\#~\citep{quipsharp},
+QuaRot~\citep{quarot} and SpinQuant~\citep{spinquant}. Quantization-aware
+training (QAT) instead learns the weights with the quantizer in the loop,
+usually with a straight-through estimator~\citep{ste}, sometimes with
+distillation~\citep{kd}. Ternary weights---$\{-s, 0, +s\}$, roughly two bits
+per weight---sit at the aggressive end of this spectrum, from early ternary
+weight networks~\citep{twn} to ternary-native training at scale
+\citep{bitnet158}.
+
+A released ternary checkpoint, however, is an opaque object. It reports a bit
+width and a benchmark table, but the file itself does not say how the weights
+were produced, how much of the quality lives in the released codes rather than
+in the quantizer, or whether the recipe is reproducible from the public base
+model. This matters: the claims that make a low-bit release interesting are
+exactly the claims a user cannot check.
+
+We report an independent forensic study of one such release: Ternary
+Bonsai 2 27B, a $\sim$2\,bpw ternary model built from Qwen3.8-27B that ships as
+a GGUF and runs on a public inference fork~\citep{prismbonsai2,prismfork,
+qwen38}. We do not run the training recipe. We treat the released artifact as
+the specimen and the public base model as the control, and we ask four
+questions:
+
+\begin{itemize}
+  \item \textbf{Q1 (format).} What exactly is the storage format, and can the
+  released codes be reproduced from the public base model without access to the
+  training code?
+  \item \textbf{Q2 (quality).} How much of the model's quality lives in the
+  released weights, as opposed to the container or the quantizer?
+  \item \textbf{Q3 (mechanism).} Is the residual between a public-base round-to-
+  nearest solution and the released codes an error-compensation trick, or
+  trained weight movement?
+  \item \textbf{Q4 (evaluation).} Does a widely cited public PTQ baseline
+  reproduce its published quality when calibration and evaluation are
+  separated?
+\end{itemize}
+
+\paragraph{Contributions.}
+\begin{enumerate}
+  \item \textbf{Format and basis recovery} (\S\ref{sec:format}). From the
+  released file alone, we recover the blockwise Walsh--Hadamard rotation basis,
+  the axis and sign conventions, and the tensor layouts, and reproduce the
+  released trits from the public base with plain absmean round-to-nearest at
+  $0.920$ mean / $0.885$ minimum per-tensor agreement (chance $0.33$). The
+  recovery is later confirmed exactly against metadata the model authors
+  published independently: block size, transform, axis, explicit signs, and
+  the inverse-rotated embedding all match.
+  \item \textbf{The residual is the model} (\S\ref{sec:residual}). A
+  byte-controlled, in-place replacement of all 402 ternary payloads with
+  rotate-and-round weights of the public base---metadata, layouts, and
+  exemptions kept byte-identical---collapses held-out perplexity from
+  $18.5851$ to $23{,}606$ ($1{,}270\times$) in the same binary, corpus, and
+  settings, even though the replaced codes still agree with the released ones
+  on 90--95\% of weights.
+  \item \textbf{The residual is trained weight movement} (\S\ref{sec:mechanism}).
+  With real activation Hessians captured on a four-layer prefix of the 27B, we
+  show that every error-compensated assignment we tried---GPTQ damping sweeps,
+  act-order, rotation-aware Hessians, group scale search, stochastic
+  calibration---moves codes \emph{away} from the released ones, and that the
+  released codes fit our Hessians about 7\% \emph{worse} than plain
+  round-to-nearest. The released codes are not an error-compensation of the
+  public base; the weights themselves moved.
+  \item \textbf{A public PTQ baseline is a calibration artifact}
+  (\S\ref{sec:ptq}). We reproduce the published $2.106\times$ figure exactly on
+  its fixed calibration passage, and show the same configurations collapse by
+  $1{,}178\times$ to $\sim$$35{,}000\times$ on held-out windows with real
+  calibration data.
+\end{enumerate}
+
+We also settle a mechanistic hypothesis: the large-$q$ mirror-descent /
+regularized mirror-descent recipe~\citep{rmd,rmd2,proximalmf} is not the
+mechanism behind the released weights (\S\ref{sec:recipe}). Direct tests inside
+the ternary loop make it worse at every checkpoint, and the shape argument
+explains why: a mirror map forms a single magnitude shell, while ternary needs
+mass at both $0$ and $s$. Separately, we retract our own earlier 1.7B retention
+figure after finding a holdout leak in our evaluation harness; the corrected,
+clean value is reported with its range.
+
+\paragraph{Scope and honesty.}
+This is a forensic study of one artifact, not a benchmark suite and not a
+replication of the recipe. Section~\ref{sec:limitations} lists the evidence
+boundary and every threat to validity we know of, including the fact that some
+numbers come from a 1.7B canary rather than the 27B, one corpus, and single
+runs. Every falsified route is recorded in the failure register in
+Appendix~\ref{app:failures} so that later work can re-assess it. No model
+weights are redistributed; all analysis uses publicly released files and the
+public base model.

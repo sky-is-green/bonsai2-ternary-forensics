@@ -1,0 +1,63 @@
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{What a released ternary checkpoint reveals.}
+Without training code, a released file still supports a surprising amount of
+verification: the format, the rotation basis, the layout conventions, and the
+code distribution are all measurable, and the public base makes the residual
+measurable too. In this case the container turned out to be fully recoverable
+from the artifact plus the base model, and the recovery later matched the
+authors' published manifest exactly. Releasing format metadata is cheap and
+disproportionately useful: it converts format reconstruction into verification
+and lets independent parties spend their effort on the scientific question
+instead.
+
+\paragraph{Agreement is not quality.}
+Ninety-two percent trit agreement sounds like a near-copy; it coexists with a
+$1{,}270\times$ perplexity collapse. The mismatched codes are not noise around
+a threshold, they are boundary placements that training put where the model
+needs them, and they carry the model. Any pipeline that reports code agreement
+as evidence of parity---ours included, before the payload-swap experiment---should treat the metric
+as a container check and validate quality by a controlled swap or a held-out
+evaluation.
+
+\paragraph{Calibration hygiene is a first-class result.}
+The public PTQ baseline reproduces its published figure on its calibration
+passage and collapses by three to four orders of magnitude off it. This is not
+a criticism of the method family but of the evaluation protocol: with
+calibration-dependent methods, the calibration and evaluation sets must be
+disjoint, and the disjointness must be stated. Our own protocol failures
+(\S\ref{sec:pilot}) are the same disease in a different organ---an evaluation
+set that was not actually held out---and they were caught only by an explicit
+audit. We report the retraction because a forensic study's credibility rests on
+its own error handling.
+
+\paragraph{Fair accounting for ``about two bits per weight''.}
+Effective bits per weight must count every parameter, including embeddings and
+norms kept at higher precision. Ternary-only counts overstate compression: our
+own otherwise ternary 1.7B recipe sat at an effective $4.53$\,bpw because the
+embedding and head were not ternarized, while the released model ternarizes its
+embedding, so a like-for-like comparison requires the effective number on both
+sides. This matters for any claim that a PTQ method at ``2-bit'' matches a
+trained ternary release.
+
+\paragraph{Negative results, recorded.}
+Several routes were eliminated: error-compensated quantization in the correct
+basis, stochastic calibration resonance, continuous attractor potentials,
+alternating projection, local per-layer distillation, entropy-based data
+selection, and the mirror map. Each is recorded with its evidence and the cost
+to revisit (Appendix~\ref{app:failures}). Two of them are informative in their
+own right: the direction of the GPTQ results (compensation moves codes away)
+and the mirror-map shape argument (a single-well force cannot populate a
+two-well target) are general observations about ternary training, not just
+statements about this model.
+
+\paragraph{Open questions.}
+Three remain. First, a full 27B end-to-end QAT/KD run, priced but not funded,
+is the only route to a reproduction of the released numbers. Second, a
+same-ruler comparison of trained ternary versus PTQ at matched effective bit
+width, on the same base and corpus, is still missing from the public record.
+Third, the extension of the forensics to mixture-of-experts models---routing
+drift under ternarization and where to place corrections---is started in the
+artifact but out of scope here; it is the natural next specimen, because
+routing adds a failure mode that dense models do not have.

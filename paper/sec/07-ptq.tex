@@ -1,0 +1,59 @@
+\section{A widely cited PTQ baseline is a calibration artifact}
+\label{sec:ptq}
+
+The forensic questions above concern the released model. A separate and more
+general question is whether the PTQ numbers that circulate alongside such
+releases survive when calibration and evaluation are separated. We study one
+public PTQ reference for this model family~\citep{thaki} by porting its
+quantizer verbatim and evaluating it two ways.
+
+\paragraph{Method.}
+We port the reference's QuIP-style pipeline (dense QR rotation, upper-Cholesky
+Hessian inverse, per-row absmean, block $128$) and instantiate binary and
+ternary arms on Qwen3-1.7B. Two evaluation regimes: a fixed-passage protocol
+identical to the one behind the published figure, and held-out evaluation with
+real $32\times2048$ calibration Hessians and windows disjoint from calibration.
+
+\paragraph{Result.}
+On the fixed passage the published number reproduces exactly: $2.027
+\rightarrow 4.268 = 2.106\times$ for the binary arm at \code{rotate=in},
+\code{damp=0.3}. With real calibration and held-out evaluation, the same
+configurations collapse (Table~\ref{tab:ptq}): binary $1{,}178\times$, ternary
+$9{,}184\times$, and $34{,}877\times$ for the combined arm, against a
+full-precision held-out perplexity of $39.7$. The public stack as a whole lands
+in the same order of brokenness ($1.2\times10^{3}$--$3.5\times10^{4}\times$),
+and an independent 1.7B canary in our own pipeline collapsed by
+$3{,}514\times$. The published $2.1\times$ exists when, and essentially only
+when, calibration and evaluation use the same passage.
+
+\begin{table}[t]
+\caption{The public PTQ baseline: the published number reproduces on its
+calibration passage and collapses off it.}
+\label{tab:ptq}
+\begin{center}
+\begin{tabular}{lc}
+\toprule
+configuration & result \\
+\midrule
+fixed-passage binary (\code{rotate=in}, damp $0.3$) & $2.027 \rightarrow 4.268$ ($\mathbf{2.106\times}$) \\
+held-out binary & $1{,}178\times$ collapse \\
+held-out ternary (\code{in}, damp $0.1$) & $9{,}184\times$ collapse \\
+held-out combined (\code{both}, damp $0.1$) & $34{,}877\times$ collapse \\
+full-precision held-out PPL & $39.7$ \\
+our 1.7B canary (PTQ) & $3{,}514\times$ collapse \\
+public stack range & $1.2\times10^{3}$--$3.5\times10^{4}\times$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+\paragraph{Reading.}
+This is a calibration-leakage mode, not a numerical quirk: the reported quality
+comes from evaluating on the passage that shaped the round decisions. The
+practical implications are twofold. First, any comparison between a
+trained-ternary release and a PTQ baseline must state that calibration and
+evaluation are disjoint; otherwise the PTQ side can look competitive while
+being non-functional off-calibration. Second, released quality claims for
+low-bit models should be accompanied by an off-calibration evaluation, which
+the published baseline lacks. We treat the $2.1\times$ figure as not
+reproducible off-calibration and use held-out numbers throughout this paper.

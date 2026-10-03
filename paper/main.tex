@@ -1,0 +1,112 @@
+\documentclass[10pt]{article}
+% Public (de-anonymized) build: compile public.tex instead of main.tex.
+\newif\ifpublic
+\ifdefined\publicbuild
+  \publictrue
+  \PassOptionsToPackage{preprint}{tmlr}
+\else
+  \publicfalse
+\fi
+\usepackage{tmlr}
+% If accepted, instead use the following for camera-ready:
+% \usepackage[accepted]{tmlr}
+
+\newcommand{\codeurl}{https://github.com/sky-is-green/bonsai2-ternary-forensics}
+\ifpublic
+  \newcommand{\coderef}{\href{\codeurl}{\texttt{github.com/sky-is-green/bonsai2-ternary-forensics}}}
+\else
+  \newcommand{\coderef}{the anonymized supplementary material}
+\fi
+
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\ifpublic
+  \hypersetup{
+    pdfborder={0 0 0},
+    colorlinks=true,
+    linkcolor=blue!50!black,
+    citecolor=green!45!black,
+    urlcolor=blue!65!black
+  }
+\fi
+\usepackage{url}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb}
+\usepackage{microtype}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\bpw}{\mathrm{bpw}}
+\newcommand{\PPL}{\mathrm{PPL}}
+\newcommand{\trit}{\mathrm{trit}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+% Unnumbered first-page footnote (used for the venue-required LLM disclosure).
+\newcommand{\blfootnote}[1]{%
+  \begingroup
+  \renewcommand{\thefootnote}{}%
+  \footnote{#1}%
+  \addtocounter{footnote}{-1}%
+  \endgroup
+}
+
+\title{Forensics on Ternary Bonsai 2 27B: Format Recovery, Trained-Weight Residual, and a Calibration Artifact}
+
+% Authors are hidden in the submission version (no [accepted]/[preprint] option).
+\author{\name Ricky Palmer \email ricky.palmer@example.com \\
+      \addr Independent Researcher}
+
+\newcommand{\fix}{\marginpar{FIX}}
+\newcommand{\new}{\marginpar{NEW}}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Ternary language models promise roughly two bits per weight, but a released
+checkpoint is an opaque artifact: it is not obvious what is verifiable from the
+file itself. We perform an independent forensic study of Ternary Bonsai 2 27B,
+a $\sim$2\,bpw ternary model built from Qwen3.8-27B. We make four
+contributions. First, we recover the storage format and the blockwise
+Walsh--Hadamard rotation basis from the released GGUF, reproducing the released
+trits from the public base model with plain absmean round-to-nearest at
+0.920 mean / 0.885 minimum agreement per tensor (chance 0.33); the recovery is
+later confirmed against metadata the authors published separately. Second, we
+show the residual is the model: a byte-controlled replacement of all 402 ternary
+payloads with rotate-and-round weights of the public base, keeping metadata and
+layout byte-identical, collapses held-out perplexity from $18.5851$ to
+$23{,}606$ ($1{,}270\times$) in the same binary, corpus and settings. Third, we
+falsify the quantizer hypothesis with real activation Hessians: every
+error-compensated assignment (GPTQ variants, act-order, rotation-aware
+Hessians, group scale search) moves codes \emph{away} from the released ones,
+and the released codes fit our Hessians $\sim$7\% worse than plain
+round-to-nearest. The residual is trained weight movement. Fourth, we show that
+a widely cited public post-training-quantization baseline ($2.1\times$) is a
+calibration-passage artifact: the same configurations collapse by
+$1{,}178\times$ to $\sim$$35{,}000\times$ on held-out windows. We close the
+quantizer reverse-engineering track, report a holdout leak that retracts our own
+earlier 1.7B retention figure, and record every falsified route so it can be
+re-assessed. No model weights are redistributed.
+\end{abstract}
+
+\input{sec/01-intro}
+\input{sec/02-background}
+\input{sec/03-artifact-method}
+\input{sec/04-format}
+\input{sec/05-residual-quality}
+\input{sec/06-mechanism}
+\input{sec/07-ptq}
+\input{sec/08-recipe}
+\input{sec/09-discussion}
+\input{sec/10-limitations}
+\input{sec/11-impact-repro}
+
+\bibliography{refs}
+\bibliographystyle{tmlr}
+
+\appendix
+\input{sec/appendix}
+
+\end{document}

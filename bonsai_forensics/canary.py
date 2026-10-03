@@ -209,23 +209,54 @@ def run(args) -> dict:
     calib, evals = build_windows(tokenizer, Path(args.corpus), args.samples, args.seq_len, args.eval_windows)
     _log(f"windows: {calib.shape[0]} calibration x {calib.shape[1]}, {evals.shape[0]} eval")
 
-    _log("capturing Hessians (T24)")
-    started = time.time()
-    batches = [
-        {"input_ids": torch.tensor(w, dtype=torch.long).unsqueeze(0),
-         "attention_mask": torch.ones((1, w.size), dtype=torch.long)}
-        for w in calib
-    ]
-    hessians = activations.capture_hessians(
-        model, batches, out_dir=hess_dir, dtype=torch.float32
-    )
-    capture_seconds = time.time() - started
-    _log(f"captured {len(hessians)} Hessians in {capture_seconds:.1f}s")
+    expected = {
+        f"{name}.weight"
+        for name, module in model.named_modules()
+        if isinstance(module, torch.nn.Linear)
+    }
+    have = {
+        path.name[: -len(activations.HESSIAN_SUFFIX)]
+        for path in hess_dir.glob(f"*{activations.HESSIAN_SUFFIX}")
+    }
+    reuse = bool(args.reuse_hessians) and expected.issubset(have)
+    if args.reuse_hessians and not reuse:
+        missing = sorted(expected - have)
+        raise SystemExit(
+            f"--reuse-hessians: {len(missing)} missing under {hess_dir} "
+            f"(e.g. {missing[:3]})"
+        )
+    if reuse:
+        # The Hessian stage is the memory blow-up: it holds every (in,in)
+        # accumulator in RAM at once (~6.6 GB for this model) on top of the
+        # model and the eval logits.  Reusing the .npy files keeps the disk
+        # copy and never materialises that dict.
+        hessians = None
+        capture_seconds = 0.0
+        _log(f"reusing {len(have)} Hessians from {hess_dir} (capture skipped)")
+    else:
+        _log("capturing Hessians (T24)")
+        started = time.time()
+        batches = [
+            {"input_ids": torch.tensor(w, dtype=torch.long).unsqueeze(0),
+             "attention_mask": torch.ones((1, w.size), dtype=torch.long)}
+            for w in calib
+        ]
+        hessians = activations.capture_hessians(
+            model, batches, out_dir=hess_dir, dtype=torch.float32
+        )
+        capture_seconds = time.time() - started
+        _log(f"captured {len(hessians)} Hessians in {capture_seconds:.1f}s")
+        # Free the in-RAM copy before GPTQ + evals; the .npy files remain.
+        del hessians
+        import gc
+
+        gc.collect()
 
     _log("quantizing (rotation + fold + GPTQ -> TQ2_0)")
     config = rq.load_config(Path(__file__).resolve().parents[1] / "configs" / "0.6b.yaml")
     config["model"] = {"name": "Qwen/Qwen3-1.7B", "revision": "main", "architecture": "qwen3"}
-    config["device"] = args.device  # GPTQ runs on the GPU when selected
+    config["device"] = args.gptq_device  # GPTQ device (CPU by default: the 152k-vocab
+    # tensors are ~2.5 GB each in float64 and OOM a 20 GB card; the model/evals stay on --device)
     config["output"] = dict(config["output"], run_dir=str(run_dir), artifact=str(work / "canary-tq2_0.gguf"))
     base = rq.SafetensorsTensorSource(args.model_dir)
     folds = rq.norm_fold_map(base.names())
@@ -272,7 +303,9 @@ def run(args) -> dict:
             "eval_windows": args.eval_windows,
             "group_size": GROUP_SIZE,
             "device": args.device,
+            "gptq_device": args.gptq_device,
             "dtype": args.dtype,
+            "reuse_hessians": bool(args.reuse_hessians),
         },
         "timing_s": {"capture": capture_seconds, "quantize": quant_seconds},
         "tensors": {"total": len(result.processed), "gptq_ternary": gptq_used},
@@ -311,7 +344,13 @@ def main(argv=None) -> int:
     parser.add_argument("--seq-len", type=int, default=2048)
     parser.add_argument("--eval-windows", type=int, default=4)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--gptq-device", default="cpu", help="device for GPTQ (default cpu; 'cuda' OOMs on the 152k-vocab tensors)")
     parser.add_argument("--dtype", default="bfloat16", choices=("bfloat16", "float32"))
+    parser.add_argument(
+        "--reuse-hessians",
+        action="store_true",
+        help="reuse <work-dir>/hessians/*.npy and skip the in-RAM capture stage",
+    )
     args = parser.parse_args(argv)
     report = run(args)
     print(json.dumps(report["eval"], indent=2, sort_keys=True))

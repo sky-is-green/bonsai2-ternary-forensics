@@ -1,0 +1,89 @@
+\section{The released artifact and the forensic toolkit}
+\label{sec:artifact}
+
+\paragraph{The specimen.}
+Bonsai 2 27B is released as a GGUF of $7.2$\,GB
+(sha256 \code{3907dc16\ldots}) derived from the public base model
+Qwen3.8-27B at a pinned revision (sha \code{1d4bf0f2\ldots})
+\citep{prismbonsai2,qwen38}. The base is a hybrid-attention transformer:
+$64$ layers, of which $16$ use full attention (layers $3,7,\dots,63$) and the
+rest use gated linear attention. In the released file, $402$ tensors are stored
+in the ternary format, comprising $26{,}869{,}760{,}000$ ternary parameters;
+the rest of the model---norms, the recurrent state path of the linear-attention
+blocks, convolutions, and a handful of small projections---is kept in BF16 or
+F32, about $0.0976\%$ of parameters by count. The embedding is ternary as well
+and is the only tensor whose rotation is inverted rather than applied; we
+return to this in \S\ref{sec:format}.
+
+\paragraph{The packed format.}
+The ternary format is the GGUF type-142 layout the release calls
+\texttt{PQ2\_0}: a group of $128$ weights is stored in $34$ bytes, with an FP16
+group scale in bytes $0$--$1$ and $32$ bytes of packed trits, $16$ trits per
+little-endian 32-bit word. Decoding is exact and cheap, which is what makes the
+rest of this study possible: we can decode every released payload to a
+$\{-1,0,+1\}$ code and a per-group scale without running any model code.
+
+\paragraph{The rotation hypothesis.}
+Rotation-based quantization is standard in this literature
+\citep{quip,quipsharp,quarot,spinquant}, so the first question is whether the
+released codes are a rotate-and-round quantization of the public base. The
+family we test is:
+
+\begin{equation}
+  R \;=\; \frac{1}{\sqrt{n}}\, H_n \, \mathrm{diag}(S),
+  \label{eq:rotation}
+\end{equation}
+
+\noindent with $n=1024$, $H_n$ the normalized Sylvester Walsh--Hadamard
+transform, $S$ an explicit $\pm 1$ sign vector stored per tensor in the file
+metadata, and the transform applied along the input axis of each linear layer.
+We treat the axis, the order of the sign and Hadamard steps, the block size, and
+whether norms are folded into the rotation as hypotheses to falsify, and score
+each hypothesis by the per-tensor trit agreement
+
+\begin{equation}
+  \eta(W, W^{\star}) \;=\; \frac{1}{|W|}\sum_i \mathbf{1}\!\left[\trit(W_i) = W_i^{\star}\right],
+  \label{eq:agreement}
+\end{equation}
+
+\noindent where $W^{\star}$ are the decoded released trits and $\trit(\cdot)$
+is the round-to-nearest ternary map under the stored group scale. The chance
+level is $1/3$: a mismatched convention scores an agreement at chance, while a
+correct one scores far above it, so the metric is a sharp discriminator.
+
+\paragraph{The controlled payload swap.}
+Agreement measures how many codes match; it does not measure whether the matched
+codes recover quality. To make the quality question causal we patch the released
+file in place: decode each of the $402$ payloads, replace the trits with a
+rotate-and-round quantization of the corresponding public-base tensor, re-pack
+byte-exactly, and keep every other byte of the file---metadata, tokenizer,
+tensor table, layouts, exemptions, offsets---unchanged. The result is a
+same-binary, same-format, same-runtime comparison in which only the ternary
+payloads vary.
+
+\paragraph{Hessians from a prefix.}
+Testing error-compensated quantizers requires real activation statistics, but
+the 27B does not fit in local memory ($55.6$\,GB of weights against $40$\,GB of
+VRAM plus roughly $20$\,GB of usable RAM). We therefore load only the embedding
+and layers $0$--$3$ ($55$ tensors) and capture float32 Hessians on real corpus
+windows, which is sufficient for the layer-wise GPTQ family; this ``prefix
+trick'' is validated by the fact that the tests of
+\S\ref{sec:mechanism} are layer-local, and by the direction of their results
+across all tested tensors.
+
+\paragraph{Evaluation protocol.}
+Quality numbers throughout the paper use the release's inference fork and its
+perplexity binary on a fixed corpus (Tiny Shakespeare~\citep{tinyshakespeare},
+$\sim$1.1\,MB, $8\times512$ context, one process at a time), plus a five-prompt
+smoke test for sanity. The protocol is deliberately small and identical across arms, so that
+the comparisons are controlled; its limits are stated in
+\S\ref{sec:limitations}. Runtime timings come from the same fork and are
+reported only descriptively.
+
+\paragraph{Falsification-first bookkeeping.}
+Every route we tested is recorded in a failure register with its claim, method,
+outcome, and the cost to re-assess it (Appendix~\ref{app:failures}). Several
+entries are negative results we consider as informative as the positive ones,
+including one retraction of our own earlier number
+(\S\ref{sec:recipe}). The register is append-only: corrections are appended,
+not rewritten.

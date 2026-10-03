@@ -1,0 +1,159 @@
+\section{Recovering the format and the rotation basis}
+\label{sec:format}
+
+\paragraph{The basis is recoverable.}
+Plain absmean round-to-nearest of the rotated public base, with the convention
+of Equation~\ref{eq:rotation}, reproduces the released trits at
+$0.920$ mean / $0.885$ minimum agreement over $26$ tensors sampled from layers
+$0$, $3$, $62$, and $63$ (Table~\ref{tab:gate1}). Chance is $0.33$; a
+$1.7$B-era public release of the same family measured $0.612$ under the same
+metric, so the $0.92$ is not an artifact of the metric but a property of the
+correct basis. Getting there required four conventions to be right
+simultaneously, visible as a cliff in the table: the transform is applied on
+the input axis, the sign multiplication happens before the Hadamard transform,
+the block size is $1024$ with per-block explicit signs, and norms are not
+folded into the rotation. Any other combination lands at chance.
+
+\begin{table}[t]
+\caption{Per-tensor trit agreement of rotate-and-round hypotheses against the
+released codes (mean over tensors; chance $1/3$). Only the input-axis,
+sign-then-Hadamard, explicit-signs convention recovers the codes.}
+\label{tab:gate1}
+\begin{center}
+\begin{tabular}{lc}
+\toprule
+hypothesis & agreement $\eta$ \\
+\midrule
+no rotation (plain absmean RTN) & $0.333$ \\
+output-axis rotation & $\sim 0.33$ \\
+FWHT-then-sign order & $\sim 0.33$ \\
+sign-then-FWHT, input axis, block $1024$ & $\mathbf{0.920}$ mean / $0.885$ min \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+\paragraph{Layouts matter as much as the basis.}
+The released file does not use a single layout for all tensors. The
+value-head rows of the linear-attention \code{in\_proj\_qkv} and
+\code{in\_proj\_z} matrices are stored tiled rather than grouped; after
+applying the standard converter reorder their agreement jumps from $0.56$ and
+$0.36$ to $0.927$. The \code{ssm\_out} matrix is the opposite: it stays
+grouped, and applying the reorder that helps the other two drops its agreement
+from $0.936$ to $0.34$. Feed-forward and attention projections are plain.
+These per-suffix layout rules had to be recovered empirically because they
+differ from what a current converter would emit.
+
+\paragraph{Scale conventions.}
+The stored group scale $d$ is close to least-squares optimal for the released
+codes themselves ($d/d_{\mathrm{LS}} \in [1.007, 1.034]$) and about
+$1.37\times$ larger than our absmean scale. Substituting their scale into our
+rotate-and-round solution \emph{lowers} agreement ($0.88$--$0.91$) relative to
+absmean ($0.89$--$0.95$), consistent with the released codes having been chosen
+at a decision boundary near $0.5\times$ the absmean scale. The public reference
+quantizer exported by the inference fork is a different object: it uses
+$d=\max|x|$ and, run on the rotated base, matches only $0.493$ of the released
+trits with a scale ratio of about $2.55$, so the fork's public tool is not the
+quantizer that produced the release.
+
+\paragraph{Independent confirmation.}
+The authors separately publish the format ground truth in a sibling
+MLX-oriented repository: a Hadamard manifest (block size, transform name, axis,
+explicit sign vectors, and the rotated tensor list) and the runtime codec for
+the packed format~\citep{prismbonsai2mlx}. Against that manifest our recovery
+matches on every axis (Table~\ref{tab:format-verify}): block size $1024$,
+normalized Sylvester Walsh--Hadamard, input-last-dimension, explicit
+$\pm 1$ signs, widths $\{5120, 6144, 17408\}$, and a byte-exact match on the
+34-byte-per-128-weights codec layout. The manifest lists $401$ forward-rotated
+tensors; our census counts $402$ ternary payloads. The difference is the
+embedding, which is inverse-rotated and named separately; the two counts
+coincide once it is accounted for. This turns the format chapter from
+reconstruction into verification: the recovery was derived from the released
+file alone, and the manifest confirms it.
+
+\begin{table}[t]
+\caption{Our recovered format conventions against the independently published
+manifest. All checked conventions match.}
+\label{tab:format-verify}
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+property & recovered from release & published manifest \\
+\midrule
+block size & $1024$ & $1024$ \\
+transform & normalized Walsh--Hadamard & normalized Sylvester WH \\
+axis & input, last dimension & input-last-dimension \\
+signs & explicit, per tensor & explicit, $28672$ values \\
+widths & $5120 / 6144 / 17408$ & same \\
+value-head grouping & \code{ssm\_out} grouped & \code{gdn\_v\_grouped: true} \\
+packing & $34$\,B per $128$, $16$ trits/word & byte-exact match \\
+forward-rotated set & $401$ tensors & $401$ \code{weight\_names} \\
+ternary payloads & $402$ ($+$ inverse embedding) & $401 + $ embedding \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+\paragraph{The zero band is the quantizer, not an attractor.}
+Decoding the released file yields the deployed code distribution directly. The
+zero fraction is $0.3276$ overall and uniform to three decimals across every
+tensor class---attention, feed-forward, linear-attention, output head, and
+embedding (Table~\ref{tab:zero}). Sign balance is symmetric ($0.3358$ positive,
+$0.3365$ negative), and no invalid code word appears. Under the absmean rule
+the expected zero share follows from the shape of the weight distribution
+alone: about $0.309$ for a near-Gaussian and about $0.328$ at kurtosis
+$\approx 4.5$ (simulated at 4M samples), with our rotated 1.7B canary sitting
+at the Gaussian value. The released model sits on the heavy-tailed prediction.
+Two consequences follow. First, the sparsity level is not a separately tuned
+quantity; there is no free knob for it. Second, the observation is
+\emph{consistent with} the zero being the quantizer's central band rather than
+a trained attractor, though it does not prove that on its own---a two-well
+potential could also land near $1/3$. What it does rule out is any recipe that
+needs a tuned sparsity target to reach the released quality.
+
+\begin{table}[t]
+\caption{Zero-state structure of the released 27B, decoded from the file.
+The zero fraction is uniform across tensor classes.}
+\label{tab:zero}
+\begin{center}
+\begin{tabular}{lrr}
+\toprule
+class & tensors & zero fraction \\
+\midrule
+attention $q$ & $64$ & $0.3276$ \\
+attention $k$ / $v$ & $32$ & $0.3274$ \\
+attention $o$ & $16$ & $0.3275$ \\
+feed-forward gate / up / down & $192$ & $0.3276$ \\
+linear attention (qkv / z / out) & $96$ & $0.3275$ \\
+output head & $1$ & $0.3279$ \\
+embedding & $1$ & $0.3280$ \\
+\midrule
+overall & $402$ & $\mathbf{0.3276}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+\paragraph{Where the missing $8\%$ lives.}
+The residual codes were not only fewer; they were structurally different.
+Within groups, the released codes are non-monotone in $|w|$ (violations
+essentially everywhere), which no pure threshold rule in this basis can
+produce. The mismatch against rotate-and-round decomposes into
+rotate-and-round weights that the release moved to zero (about $1.6$M elements)
+and zeros the release moved off zero (about $1.0$M); there are no
+$-1 \leftrightarrow +1$ flips. Mismatches concentrate at $|w| \approx 0.5\times$
+the group scale and vanish for $|w| > 1.2\times$ the scale. Measured in weight
+space, the released assignment is about $10\%$ closer to the rotated base than
+round-to-nearest is (relative error $0.460$--$0.482$ versus
+$0.510$--$0.511$). Finally, the tensors exempt from ternarization also moved:
+norms drifted by up to $0.07$ in absolute value, and the small BF16
+projections in the recurrent path are element-wise decorrelated from the base
+while their sorted norms remain correlated at $0.93$--$0.98$, a signature of
+permutation plus drift rather than re-initialization.
+
+This fingerprint is consistent with error-compensated quantization or with
+training, and it is what motivated the mechanism tests of the next two
+sections. The short version is that the first hypothesis did not survive: the
+$92\%$ agreement is an excellent container---and a poor proxy for
+quality---because the missing codes are exactly where the model's quality
+lives.
