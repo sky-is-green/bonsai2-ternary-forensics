@@ -116,9 +116,14 @@ def gptq_quantize(
     act_order: bool = False,
     block_size: int = DEFAULT_BLOCK_SIZE,
     refine_iters: int = REFINE_ITERS,
+    scales: torch.Tensor | None = None,
     device: str | torch.device | None = None,
 ) -> GptqResult:
     """Quantize `W: (out, in)` with GPTQ error compensation using `H: (in, in)`.
+
+    `scales`, when given, is a precomputed `(out, n_groups)` table (e.g. the
+    Lloyd fixed-point rule); otherwise `group_scales_torch` (absmean + LS
+    refine) supplies it.
 
     `device` moves the whole computation (Cholesky, inverts, error propagation)
     to GPU when available; the T10 canary runs GPTQ on the RX 7900 XT and the
@@ -150,7 +155,14 @@ def gptq_quantize(
     h = hessian[order][:, order]
     h_inv = _damped_cholesky_inverse(h, damp)
 
-    scales = group_scales_torch(w, group_size=group_size, refine_iters=refine_iters)
+    if scales is None:
+        scales = group_scales_torch(w, group_size=group_size, refine_iters=refine_iters)
+    else:
+        scales = torch.as_tensor(scales, dtype=work_dtype)
+        if scales.shape != (out_features, math.ceil(in_features / group_size)):
+            raise ValueError(
+                f"scales {tuple(scales.shape)} do not match W {tuple(w.shape)} "
+                f"at group {group_size}")
     work = w[:, order].clone()
     codes = torch.zeros_like(work, dtype=torch.int8)
     n_groups = scales.shape[-1]
