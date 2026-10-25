@@ -28,6 +28,7 @@ the track's negative register moved with it.
 |---|---|
 | [HADAMARD-VERIFICATION.md](HADAMARD-VERIFICATION.md) | Format/Hadamard verification against Prism's published ground truth |
 | [QUANTIZER-DECISION.md](QUANTIZER-DECISION.md) | The PQ2_0 quantizer is unrefined absmean RTN, decided by elimination |
+| [PACKING-PARITY.md](PACKING-PARITY.md) | PTQ1_0 and PQ2_0 are two packings of the same Bonsai 2 ternary weights; measured code/scale parity |
 | [RUN-CANARY.md](RUN-CANARY.md) | The 1.7B end-to-end canary gate |
 | [EXPERIMENTS.md](EXPERIMENTS.md) | Mirror-descent attractor search on the 1.7B canary |
 | [EXPORT-PARITY.md](EXPORT-PARITY.md) | rmd student → PQ2_0 → dequant round-trip parity |

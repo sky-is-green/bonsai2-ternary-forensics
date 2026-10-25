@@ -45,6 +45,12 @@ Source: same whitepaper, Tables 8 (8B), 9 (4B), 10 (1.7B).
 | 1-bit Bonsai 1.7B | 58.24 | 40.88 | 70.2% |
 | 1-bit Bonsai 8B | 71.02 | 59.86 | 84.3% |
 
+These are the older **binary 1-bit Bonsai** line, not Bonsai 2's PTQ1_0.
+Bonsai 2 PTQ1_0 is a dense 1.75-bpw packing of the same ternary weights as
+PQ2_0; the two packs are code- and scale-identical
+([PACKING-PARITY.md](PACKING-PARITY.md)).  Do not compare these 1-bit rows to
+Bonsai 2's PTQ1_0/PQ2_0.
+
 ## Our canary (Qwen3-1.7B, PPL ratio — a *different ruler*)
 
 `ratio = student PPL / teacher PPL`; retention = 1/ratio. Clean multi-region
